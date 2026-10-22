@@ -1,6 +1,6 @@
-# MuseQuotaWidget — Muse 剩余额度悬浮窗
+# MuseQuotaWidget — Muse 剩余额度悬浮窗（Python 版，Mac / Windows 通用）
 
-一个 Windows 桌面小悬浮窗：无边框、圆角、默认始终置顶，
+一个桌面小悬浮窗：无边框、圆角、默认始终置顶，
 鼠标拖动可移动（点到按钮、滑块时不拖动）。没有右键菜单：
 鼠标悬停到悬浮窗上时右上角出现一个齿轮按钮，点它展开
 内置设置面板；点齿轮或面板里的“完成”可收起。
@@ -14,6 +14,78 @@
 （低于 50% 变黄、低于 20% 变红，条的颜色跟百分比一致），
 下面一行只放刷新时间（每周额度重置时间），不带任何前缀字样。
 不显示标题、计划、已用、额外词元等任何字样。
+刷新时间一律转本地时间显示：hatch-api 返回的 Unix / ISO
+时间本身是 UTC（例如 1793244675 秒 = UTC 03:31），
+解码时转本地后才是 11:31，不再原样显示 UTC。
+
+## 运行（Mac / Windows）
+
+需要 Python 3.10+ 和 PySide6（Qt 悬浮窗 + QtWebEngine 登录窗）。
+C# / WPF 版已整段删除，git 历史（5337ffe 及之前）里还能找回，
+不要再用 Visual Studio / dotnet 构建。
+
+```bash
+# 第一次：装依赖（Mac 用 python3，Windows 用 python）
+python3 -m pip install -r requirements.txt
+
+# 启动
+python3 main.py
+# Mac 也可以：./run.sh
+# Windows 也可以：双击 run.bat
+```
+
+**本机未验证项（Linux 编不了 GUI、也测不了 QtWebEngine 登录）：**
+悬浮窗的圆角、透明、齿轮悬停、拖动、设置面板展开后的
+528 宽与高度自适应，以及 QtWebEngine 登录 / 后台自动登录，
+都需要在 Mac 和 Windows 上第一次运行时实测确认。
+Linux 上只做了核心逻辑单测（额度解码、节奏计算、登录指纹），
+没有跑过界面。
+
+首次使用：点齿轮 → “登录 Muse…” → 在内置浏览器窗口里登录
+muse.ai → 点“验证登录并读取额度”。只有在真实额度响应通过
+解码后窗口才会关闭并显示额度；失败时窗口保持打开，可重试。
+点齿轮 → “退出登录”只清内存里的令牌，网页登录 Cookie 仍在
+浏览器数据文件夹中；彻底退出请手动删除该文件夹
+（Mac：`~/Library/Application Support/MuseQuotaWidget/QtWebEngine`，
+Windows：`%LOCALAPPDATA%\MuseQuotaWidget\QtWebEngine`）。
+
+**之后每次打开软件不用再点登录：**启动时悬浮窗会在后台
+自动登录——用上次登录留下的 Cookie，在一个移到屏幕外的
+后台浏览器窗口里加载 muse.ai 并静默换令牌，成功就直接显示额度，
+用户看不到这个窗口、不用点任何东西。令牌本身仍只存内存，
+重启后令牌丢了也不要紧，后台登录会用 Cookie 再换一个。
+只有 Cookie 已过期、被清除或 Muse 要求重新验证时，
+后台登录才会失败，那时悬浮窗显示“未登录”，点齿轮 → 登录一次
+即可；面板里点“刷新数据”时若令牌已丢，也会先试一次后台登录。
+
+如果登录窗报 QtWebEngine 不可用：请重新安装 PySide6
+（`python3 -m pip install --force-reinstall PySide6`），
+主悬浮窗仍能打开、只显示“未登录”，额度要等登录可用后才能读取。
+
+## 设置面板（齿轮按钮，RamanVista 风格）
+
+鼠标悬停到悬浮窗上时右上角出现齿轮按钮（平时不显示），
+点它：额度区缩到左上角（大字 44 → 28，居中 → 左对齐），
+窗体从 240 宽放大到 528 宽，右侧出现设置面板；再点齿轮
+或面板底部的“完成”就收回 240 宽。面板控件风格参考
+RamanVista：深色表面 #2B2D33 / #25272D、边框 #606060、
+主色浅蓝 #4FC3F7、卡片圆角 12、按钮圆角 6、滑块拇指
+#4FC3F7（不引 MaterialDesign 包，只复刻颜色与样式）。
+
+面板里就是原来右键菜单的全部内容，重新排成卡片：
+账号（登录状态 + “登录 Muse…” / “退出登录”，已登录时
+登录按钮禁用）、数据（“刷新数据”）、刷新频率（滑块
+1-60 分钟，拖动立即生效并保存到设置文件，只存分钟数，
+不存账号与令牌，下次启动沿用；默认 5 分钟）、显示
+（“始终置顶”复选框）、其他（“打开诊断日志”）、
+退出软件。刷新是读额度接口，不是对话，不耗对话 token；
+过于频繁可能触发限流，建议 5 分钟以上。
+
+设置与日志文件位置：
+- Mac：`~/Library/Application Support/MuseQuotaWidget/settings.json`
+  与 `muse-debug.log`
+- Windows：`%LOCALAPPDATA%\MuseQuotaWidget\settings.json`
+  与 `muse-debug.log`
 
 ## 用量节奏（第二版，主条下方）
 
@@ -35,33 +107,10 @@
 “预计重置时还剩 X%”，正好在重置时写“预计正好在重置时用完”；
 预计是外推不是承诺，速度一变它就变；已过天数为 0 时
 算不出速度，只写快/慢。
-刷新时间一律转本地时间显示：hatch-api 返回的 Unix / ISO
-时间本身是 UTC（例如 1793244675 秒 = UTC 03:31），
-解码时转本地后才是 11:31，不再原样显示 UTC。
-
-## 设置面板（齿轮按钮，RamanVista 风格）
-
-鼠标悬停到悬浮窗上时右上角出现齿轮按钮（平时不显示），
-点它：额度区缩到左上角（大字 44 → 28，居中 → 左对齐），
-窗体从 240 宽放大到 528 宽，右侧出现设置面板；再点齿轮
-或面板底部的“完成”就收回 240 宽。面板控件风格参考
-RamanVista：深色表面 #2B2D33 / #25272D、边框 #606060、
-主色浅蓝 #4FC3F7、卡片圆角 12、按钮圆角 6、滑块拇指
-#4FC3F7（不引 MaterialDesign 包，只复刻颜色与样式）。
-
-面板里就是原来右键菜单的全部内容，重新排成卡片：
-账号（登录状态 + “登录 Muse…” / “退出登录”，已登录时
-登录按钮禁用）、数据（“刷新数据”）、刷新频率（滑块
-1-60 分钟，拖动立即生效并保存到
-`%LOCALAPPDATA%\MuseQuotaWidget\settings.json`，只存分钟数，
-不存账号与令牌，下次启动沿用；默认 5 分钟）、显示
-（“始终置顶”复选框）、其他（“打开诊断日志”）、
-退出软件。刷新是读额度接口，不是对话，不耗对话 token；
-过于频繁可能触发限流，建议 5 分钟以上。
 
 ## 额外词元（已不再显示，仅作对数记录）
 
-极简版悬浮窗不再显示额外词元。之前显示 12.4 亿时算术本身
+悬浮窗不再显示额外词元。之前 C# 版显示 12.4 亿时算术本身
 没错：hatch-api 返回的 topup_balance 就是 1,240,000,000，
 ÷ 1 亿 = 12.4 亿；而 agent 侧的 `subscription-status` 一直说
 额外 tokens 是 31B、0% 已用，两边不是同一个数，至少有一个
@@ -75,15 +124,14 @@ RamanVista：深色表面 #2B2D33 / #25272D、边框 #606060、
 3,100,000,000（31 亿）或 31,000,000,000（31B）的字段，
 以及它叫什么名字；到时按日志里的实际字段名再定。
 
-## 实时链路（v3，内置登录直连，参照 ai-quota）
+## 实时链路（内置登录直连，参照 ai-quota）
 
-本项目 v3 的 Muse 直连实现，思路参照
-[HuiAnnn/ai-quota](https://github.com/HuiAnnn/ai-quota) 里 Muse
-那部分（macOS Swift + WKWebView），用 WPF + WebView2 重写，
+思路参照 [HuiAnnn/ai-quota](https://github.com/HuiAnnn/ai-quota) 里 Muse
+那部分（macOS Swift + WKWebView），Python 版用 QtWebEngine 重写，
 Swift 代码没有直接复制，逻辑按 ai-quota 的做法对齐：
 
 ```
-点齿轮 → “登录 Muse…” → 内置 WebView2 登录窗口打开 muse.ai
+点齿轮 → “登录 Muse…” → 内置 QtWebEngine 窗口打开 muse.ai
   → 用户在窗口里登录 → 点“验证登录并读取额度”
   → 窗口内同源 POST /api/auth/check 换一个访问令牌（只取
     outcome / access_token / viewer_id / session_binding_id 等字段）
@@ -93,8 +141,7 @@ Swift 代码没有直接复制，逻辑按 ai-quota 的做法对齐：
   → 每 5 分钟用同一令牌刷新一次，直到令牌失效
 ```
 
-- 登录在应用自己的 WebView2 数据文件夹
- （`%LOCALAPPDATA%\MuseQuotaWidget\WebView2`）里完成，不用系统
+- 登录在应用自己的浏览器数据文件夹里完成，不用系统
   浏览器、不用 Muse 原生应用的登录状态；Cookie 持久化在该文件夹，
   下次打开登录窗口时若会话未过期可直接验证。
 - **令牌只存在内存里**，绝不写盘、绝不进日志、
@@ -105,72 +152,31 @@ Swift 代码没有直接复制，逻辑按 ai-quota 的做法对齐：
 - 直连失败（网络、限流）时不丢令牌，下次定时刷新再试；
   登录失效或换号时清令牌并提示重新登录。
 
-## 在 Windows 上构建运行
-
-需要 .NET 8 SDK（WPF 只能在 Windows 上编译，Linux 上编不了）
-和 WebView2 Runtime（Windows 11 自带 Edge 的机器上一般已有，
-没有时需先装 Evergreen Runtime）：
-
-```powershell
-dotnet build -c Release
-# 首次构建需要联网还原 Microsoft.Web.WebView2 的 NuGet 包
-# 运行：
-.\src\MuseQuotaWidget\bin\Release\net8.0-windows\MuseQuotaWidget.exe
-```
-
-也可以直接用 Visual Studio 打开 `MuseQuotaWidget.sln`，按 F5 运行。
-
-首次使用：点齿轮 → “登录 Muse…” → 在内置窗口里登录
-muse.ai → 点“验证登录并读取额度”。只有在真实额度响应通过
-解码后窗口才会关闭并显示额度；失败时窗口保持打开，可重试。
-点齿轮 → “退出登录”只清内存里的令牌，网页登录 Cookie 仍在
-WebView2 数据文件夹中；彻底退出请手动删除该文件夹。
-
-**之后每次打开软件不用再点登录：**启动时悬浮窗会在后台
-自动登录——用上次登录留下的 Cookie，在一个离屏隐藏的
-后台窗口里加载 muse.ai 并静默换令牌，成功就直接显示额度，
-用户看不到这个窗口、不用点任何东西。令牌本身仍只存内存，
-重启后令牌丢了也不要紧，后台登录会用 Cookie 再换一个。
-只有 Cookie 已过期、被清除或 Muse 要求重新验证时，
-后台登录才会失败，那时悬浮窗显示“未登录”，点齿轮 → 登录一次
-即可；面板里点“刷新数据”时若令牌已丢，也会先试一次后台登录。
-
-**本机未验证项（Linux 编不了 WPF、也测不了 WebView2 登录）：**
-hatch-api 返回的 `resets_at` 格式需在 Windows 上第一次登录后
-实测确认——代码已同时兼容字符串日期/ISO 时间和数字 Unix 时间戳
-（数字秒级已用网页端数据验证过：1793244675 正好是
-2026-10-29 11:31 CST），若 hatch-api 的字段名或格式有出入，
-以第一次登录后的实际返回为准调整解码器。
-
 **验证失败时怎么定位：**登录窗口的提示现在会写明是“登录检查”
 还是“额度读取”那一步失败，并把结构记录写到本地诊断日志
-`%LOCALAPPDATA%\MuseQuotaWidget\muse-debug.log`（点齿轮 →
-“打开诊断日志”）。日志里只有字段名、字段类型、HTTP 状态、
+（点齿轮 → “打开诊断日志”）。日志里只有字段名、字段类型、HTTP 状态、
 outcome / type / reason / state 这类状态词，**没有令牌、
 没有账号 id、没有百分比与余额**，可以放心发出来；发的时候
 先看最后一行是 `auth:` 还是 `quota invalid:`，就知道是哪一步
 的返回体结构对不上。
 
-## 开机自启（可选）
-
-把 Release 下 `MuseQuotaWidget.exe` 的快捷方式放进启动文件夹：
-
-```
-Win + R → shell:startup → 把快捷方式粘贴进去
-```
-
 ## 文件结构
 
 ```
-MuseQuotaWidget.sln
-src/MuseQuotaWidget/
-  MuseQuotaWidget.csproj   # .NET 8 + WPF
-  App.xaml / App.xaml.cs
-  MainWindow.xaml / MainWindow.xaml.cs  # 悬浮窗界面与刷新、倒计时逻辑
-  Models/QuotaData.cs                  # 额度快照模型（只有百分比/时间/余额，无凭据）
-  Services/MuseApi.cs                  # hatch-api 响应解码 + 令牌指纹（参照 ai-quota）
-  Services/MuseSession.cs              # 内存会话 + hatch-api 直连（令牌不存盘）
-  Services/MuseDiagnostics.cs          # 本地诊断日志（不记令牌与账号 id）
-  Services/SettingsStore.cs            # 刷新频率本地设置（只存分钟数）
-  LoginWindow.xaml / LoginWindow.xaml.cs  # 内置 WebView2 登录窗口 + /api/auth/check
+main.py                  # 入口
+requirements.txt         # PySide6
+run.sh / run.bat         # Mac / Windows 启动脚本
+muse_quota_widget/
+  paths.py               # 平台本地路径（设置、日志、浏览器数据）
+  diagnostics.py         # 本地诊断日志（不记令牌与账号 id）
+  quota_api.py           # hatch-api 响应解码 + 令牌指纹（参照 ai-quota）
+  muse_session.py        # 内存会话 + hatch-api 直连（令牌不存盘）
+  settings_store.py      # 刷新频率本地设置（只存分钟数）
+  pace.py                # 用量节奏纯计算（与界面无关，可单测）
+  pace_widget.py         # 节奏刻度手绘控件（渐变 + 白线 + 白点）
+  web_auth.py            # 网页登录换令牌共用逻辑（可见窗与后台窗共用）
+  webengine.py           # QtWebEngine 懒加载 + 共享持久化 Profile
+  login_window.py        # 内置 QtWebEngine 登录窗口 + /api/auth/check
+  background_login.py    # 后台自动登录（离屏浏览器窗，复用 Cookie）
+  main_window.py         # 悬浮窗 + 齿轮设置面板 + 额度刷新线程
 ```

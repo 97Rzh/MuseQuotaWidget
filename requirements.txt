@@ -1,0 +1,6 @@
+# MuseQuotaWidget Python 版依赖：只用 PySide6（Qt 悬浮窗 + QtWebEngine 登录窗）。
+# 不写死版本号：构建时 pip 会取与当前平台（macOS arm64 / Windows x64 等）匹配的轮子，
+# 避免把某个具体版本写死后在另一台机器上装不上。
+# 注意：PySide6 自带 QtWebEngine（登录窗用）；如果某平台的 PySide6 里没有 WebEngine，
+# 主悬浮窗仍能打开、只显示“未登录”，登录时再明确报错，不会一启动就崩。
+PySide6
