@@ -2,3 +2,10 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+# PyInstaller 打包产物：本地生成，不进仓库。
+dist/
+build/
+*.spec
+# Mac 打包时由 iconutil 生成的 .icns：本地生成，不进仓库，
+# 需要时跑 build_mac.sh 就会重新生成。
+assets/icon.icns

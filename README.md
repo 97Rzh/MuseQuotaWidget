@@ -11,6 +11,35 @@
 拖离边缘，就取消停靠、恢复成普通悬浮窗。设置面板展开时
 不触发停靠，点齿轮展开设置会先取消停靠。
 
+## 打包成 Mac 程序（.app）
+
+图标在 `assets/` 里：深色圆角方块 + 绿色圆环 + 白色 %，
+跟悬浮窗本体一个风格，不绑定具体额度数值。
+`assets/make_icon.py` 是画图标的脚本（只依赖 Pillow），
+改完设计后跑它就能重新生成 `icon.png` / `icon.iconset/` / `icon.ico`。
+
+在 Mac 上打包（必须在 Mac 上跑，Linux 上打出来不是 .app）：
+
+```zsh
+cd ~/Desktop/MuseQuotaWidget
+./build_mac.sh
+```
+
+这一步会先装依赖和 PyInstaller，再用 macOS 自带的
+`iconutil` 把 `assets/icon.iconset/` 转成 `assets/icon.icns`，
+最后用 PyInstaller `--windowed` 打出 `dist/MuseQuotaWidget.app`，
+可直接拖到“应用程序”里双击打开，不用再走终端。
+
+注意：打出来的 .app 没有签名，第一次打开会被 Gatekeeper 拦，
+右键点 .app → “打开” → 再点“打开”，或者跑
+`xattr -cr dist/MuseQuotaWidget.app` 后再双击。
+设置、日志、浏览器 Cookie 还是存在
+`~/Library/Application Support/MuseQuotaWidget/`，跟终端版同一套，
+所以 .app 版不用重新登录（前提是终端版已经登录过、Cookie 还没过期）。
+如果登录窗在 .app 里报 WebEngine 不可用，先确认打包时装的是
+最新版 PyInstaller（PyInstaller 6.5 起已在 Mac 上关掉 QtWebEngine
+沙箱，避免 QtWebEngineProcess 崩溃），再把报错贴出来。
+
 **唯一数据来源是 Muse 直连（内置登录），没有 GitHub 快照、
 没有本地数据文件、没有手动填数。**未登录时只显示“未登录”，
 不拿旧数据冒充新数据；刷新失败时继续显示内存里
