@@ -12,6 +12,8 @@
     <Border.ContextMenu>
       <ContextMenu>
         <MenuItem Header="刷新数据" Click="Refresh_Click" />
+        <MenuItem Header="登录 Muse…" Click="Login_Click" />
+        <MenuItem Header="退出登录" Click="Logout_Click" />
         <MenuItem x:Name="TopmostMenuItem" Header="始终置顶" IsCheckable="True" IsChecked="True" Click="Topmost_Click" />
         <MenuItem Header="打开数据文件 (quota.json)" Click="OpenDataFile_Click" />
         <Separator />

@@ -11,6 +11,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- WebView2 用浮动版本：构建时 NuGet 会取最新的 1.0.x，避免把某个
+         具体版本号写死后在 Windows 上还原失败。首次构建需要联网还原。 -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="quota.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
