@@ -27,7 +27,37 @@ public partial class MainWindow : Window
         _refreshTimer.Tick += async (_, _) => await LoadQuotaAsync();
         _refreshTimer.Start();
 
-        _ = LoadQuotaAsync();
+        _ = AutoLoginAndLoadAsync();
+    }
+
+    /// <summary>
+    /// 启动（和手动刷新）时先后台自动登录：用上次登录留下的 Cookie
+    /// 在离屏窗口里静默换令牌，成功就直接显示额度，用户不用再点登录。
+    /// 只有 Cookie 已过期、被清除或 Muse 要求重新验证时才会失败，
+    /// 那时落到 LoadQuotaAsync 显示“未登录”，用户右键手动登录即可。
+    /// 定时刷新不走这里，避免会话过期后每 5 分钟都弹一个后台窗。
+    /// </summary>
+    private async Task AutoLoginAndLoadAsync()
+    {
+        if (!_museSession.HasToken)
+        {
+            TimeText.Text = "自动登录中…";
+            try
+            {
+                var background = new BackgroundLoginWindow(_museSession);
+                var credential = await background.TryAuthenticateAsync();
+                if (credential is not null)
+                {
+                    _museSession.SetCredential(credential);
+                }
+            }
+            catch
+            {
+                // 后台登录失败不弹窗、不崩，只落到手动登录。
+            }
+        }
+
+        await LoadQuotaAsync();
     }
 
     private void SetRefreshInterval(int minutes)
@@ -108,7 +138,19 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void Refresh_Click(object sender, RoutedEventArgs e) => await LoadQuotaAsync();
+    private async void Refresh_Click(object sender, RoutedEventArgs e)
+    {
+        // 手动刷新时若令牌已丢，也先试一次后台自动登录，
+        // Cookie 还在的话就不用用户再点登录；定时刷新不走这里。
+        if (_museSession.HasToken)
+        {
+            await LoadQuotaAsync();
+        }
+        else
+        {
+            await AutoLoginAndLoadAsync();
+        }
+    }
 
     private void Login_Click(object sender, RoutedEventArgs e)
     {
