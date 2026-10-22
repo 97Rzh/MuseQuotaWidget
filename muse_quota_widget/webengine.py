@@ -8,8 +8,12 @@ Profile 共享：登录窗与后台登录窗用同一个持久化 Profile，
 Cookie 就存在 app_dir/QtWebEngine 里，相当于 C# 版的
 WebView2 数据文件夹；后台登录能复用登录窗留下的 Cookie。
 
-Qt6 的模块划分：QWebEngineView / QWebEnginePage 在 QtWebEngineWidgets，
-QWebEngineProfile 在 QtWebEngineCore（个别版本也在 Widgets 里，做了兼容）。
+Qt6 的模块划分（2026-10-23 Mac 实测教训，别再按 Qt5 写）：
+QWebEngineView 在 QtWebEngineWidgets，
+QWebEnginePage 与 QWebEngineProfile 都在 QtWebEngineCore。
+以前的代码把 QWebEnginePage 也写在 Widgets 里，WebEngine 装上
+之后照样报：cannot import name 'QWebEnginePage' from
+'PySide6.QtWebEngineWidgets'，因为那个 .so 里根本没有这个名字。
 """
 
 from __future__ import annotations
@@ -26,12 +30,13 @@ def try_import_webengine():
     """返回 (QWebEngineView, QWebEnginePage, QWebEngineProfile)，失败返回 (None, None, None)。"""
     global _import_error
     try:
-        from PySide6.QtWebEngineWidgets import QWebEnginePage, QWebEngineView
+        from PySide6.QtWebEngineWidgets import QWebEngineView
 
         try:
-            from PySide6.QtWebEngineCore import QWebEngineProfile
+            from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
         except ImportError:
-            from PySide6.QtWebEngineWidgets import QWebEngineProfile  # type: ignore
+            # 极老版本才把 Page/Profile 放 Widgets 里，留作兼容兜底。
+            from PySide6.QtWebEngineWidgets import QWebEnginePage, QWebEngineProfile  # type: ignore
 
         return QWebEngineView, QWebEnginePage, QWebEngineProfile
     except Exception as e:  # ImportError 等都按缺失处理，不崩主窗。
