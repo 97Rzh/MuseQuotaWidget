@@ -1,5 +1,3 @@
 bin/
 obj/
 .vs/
-# 只读 GitHub token，只放 exe 旁边，绝不进仓库。
-github-token.txt

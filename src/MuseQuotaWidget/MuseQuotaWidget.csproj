@@ -16,10 +16,4 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.*" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Content Include="quota.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-  </ItemGroup>
-
 </Project>

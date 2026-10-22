@@ -11,7 +11,7 @@ namespace MuseQuotaWidget.Services;
 /// 关键约定（与 ai-quota 一致，改动处另有注释说明）：
 /// - 登录在应用自己的 WebView2 数据文件夹里完成，不用系统浏览器、
 ///   不用 Muse 原生应用的登录状态；
-/// - 令牌只存在内存里，绝不写盘、绝不进日志、绝不进 quota.json；
+/// - 令牌只存在内存里，绝不写盘、绝不进日志；
 /// - 令牌只发给 hatch-api.meta.ai 这一个主机，不带 Cookie；
 /// - 额度快照里只有百分比、时间和词元余额，不含任何凭据。
 /// </summary>

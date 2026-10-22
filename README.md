@@ -1,7 +1,12 @@
 # MuseQuotaWidget — Muse 剩余额度悬浮窗
 
 一个 Windows 桌面小悬浮窗：无边框、圆角、默认始终置顶，
-鼠标拖动可移动，右键菜单可刷新 / 开关置顶 / 打开数据文件 / 退出。
+鼠标拖动可移动，右键菜单可刷新 / 登录 / 退出登录 / 开关置顶 / 退出。
+
+**唯一数据来源是 Muse 直连（内置登录），没有 GitHub 快照、
+没有本地数据文件、没有手动填数。**未登录时悬浮窗只显示
+“未登录”，不拿旧数据冒充新数据；刷新失败时继续显示内存里
+的上次成功快照并在底部提示。
 
 显示内容：周额度剩余百分比、已用百分比、额外 tokens 剩余、
 周额度重置时间及倒计时、数据更新时间。
@@ -28,32 +33,13 @@ Swift 代码没有直接复制，逻辑按 ai-quota 的做法对齐：
  （`%LOCALAPPDATA%\MuseQuotaWidget\WebView2`）里完成，不用系统
   浏览器、不用 Muse 原生应用的登录状态；Cookie 持久化在该文件夹，
   下次打开登录窗口时若会话未过期可直接验证。
-- **令牌只存在内存里**，绝不写盘、绝不进日志、绝不进 quota.json、
+- **令牌只存在内存里**，绝不写盘、绝不进日志、
   绝不发给除 hatch-api 之外的任何主机；令牌与账号指纹
   （SHA256(viewer_id + session_binding_id)）成对核对，指纹变了
   就视为换号并丢弃令牌。
-- 读额度接口本身不是对话，不产生对话 token；悬浮窗底部会显示
-  数据来源：Muse 直连 / GitHub / 本地文件。
-- 数据源优先级：Muse 直连 > GitHub 快照 > 本地 quota.json。
-  直连失败（网络、限流）时不丢令牌，临时回落并在下次刷新重试；
+- 读额度接口本身不是对话，不产生对话 token。
+- 直连失败（网络、限流）时不丢令牌，下次定时刷新再试；
   登录失效或换号时清令牌并提示重新登录。
-
-GitHub 回落路（直连不可用时用），需要在 exe 旁边放一个只读 token：
-
-1. GitHub → Settings → Developer settings → Personal access tokens
-   → Fine-grained tokens → New token；
-2. 只勾这一个仓库 `97Rzh/MuseQuotaWidget`，权限只给 Contents
-   的 Read（读 quota.json 够用），其他权限一律不给；
-3. 把 token 存成 exe 旁边的 `github-token.txt`（纯文本、只有这一行）。
-   这个文件已进 `.gitignore`，**绝不要提交进仓库、不要发给任何人**。
-   没有这个文件时，悬浮窗自动回落到本地 `quota.json`。
-
-## 当前数据（2026-10-22 17:04 查到，本地回落快照）
-
-- 计划：免费版（无订阅）
-- 周额度：已用 8%，剩余 **92%**
-- 重置：2026-10-29 11:31（CST）
-- 额外 tokens：剩余 31B，已用 0%
 
 ## 在 Windows 上构建运行
 
@@ -84,18 +70,6 @@ hatch-api 返回的 `resets_at` 格式需在 Windows 上第一次登录后
 2026-10-29 11:31 CST），若 hatch-api 的字段名或格式有出入，
 以第一次登录后的实际返回为准调整解码器。
 
-## 手动更新（备用，不走 GitHub 时用）
-
-右键悬浮窗 → “打开数据文件 (quota.json)”，改
-`usedPercent` / `remainingPercent` / `weeklyResetAt` /
-`additionalTokensLeft` / `updatedAt`，保存后右键“刷新数据”
-立即刷新。`quota.json` 里只有展示用的百分比和时间，
-**不要往里面写任何账号、密码、token 或 API Key**。
-
-Agent 端的更新脚本在 `tools/update-quota.py`：只在 Muse agent
-所在的机器上运行（依赖 `subscription-status`），它只更新文件、
-不推送，推送由“有变化才触发”的那一步做。
-
 ## 开机自启（可选）
 
 把 Release 下 `MuseQuotaWidget.exe` 的快捷方式放进启动文件夹：
@@ -113,11 +87,7 @@ src/MuseQuotaWidget/
   App.xaml / App.xaml.cs
   MainWindow.xaml / MainWindow.xaml.cs  # 悬浮窗界面与刷新、倒计时逻辑
   Models/QuotaData.cs                  # 额度快照模型（只有百分比/时间/余额，无凭据）
-  Services/FileQuotaProvider.cs        # 读本地 quota.json，坏文件不崩
-  Services/GitHubQuotaProvider.cs      # 从 GitHub 拉 quota.json（需本地 github-token.txt）
   Services/MuseApi.cs                  # hatch-api 响应解码 + 令牌指纹（参照 ai-quota）
   Services/MuseSession.cs              # 内存会话 + hatch-api 直连（令牌不存盘）
   LoginWindow.xaml / LoginWindow.xaml.cs  # 内置 WebView2 登录窗口 + /api/auth/check
-  quota.json                           # 额度数据（发布时会复制到 exe 旁边）
-tools/update-quota.py                  # agent 端：查实时额度并更新 quota.json
 ```

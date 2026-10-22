@@ -4,8 +4,7 @@ namespace MuseQuotaWidget.Models;
 
 /// <summary>
 /// 悬浮窗展示的一份额度快照。字段故意只保留“展示用”的数，不含任何账号凭证。
-/// 数据来源见 README：目前是本地 quota.json，未来如有公开接口，
-/// 只需新增一个 IQuotaProvider 实现并在 MainWindow 里替换即可。
+/// 唯一数据来源是 Muse 直连（内置登录后调 hatch-api），见 README。
 /// </summary>
 public sealed class QuotaData
 {

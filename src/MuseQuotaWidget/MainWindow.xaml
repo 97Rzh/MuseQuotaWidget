@@ -15,7 +15,6 @@
         <MenuItem Header="登录 Muse…" Click="Login_Click" />
         <MenuItem Header="退出登录" Click="Logout_Click" />
         <MenuItem x:Name="TopmostMenuItem" Header="始终置顶" IsCheckable="True" IsChecked="True" Click="Topmost_Click" />
-        <MenuItem Header="打开数据文件 (quota.json)" Click="OpenDataFile_Click" />
         <Separator />
         <MenuItem Header="退出" Click="Exit_Click" />
       </ContextMenu>
@@ -29,18 +28,18 @@
 
       <StackPanel Orientation="Horizontal" Margin="0,6,0,2" VerticalAlignment="Bottom">
         <TextBlock Text="剩余" FontSize="14" Foreground="#D1D5DB" VerticalAlignment="Bottom" Margin="0,0,6,6" />
-        <TextBlock x:Name="RemainingText" FontSize="40" FontWeight="Bold" Foreground="#4ADE80" Text="94%" />
+        <TextBlock x:Name="RemainingText" FontSize="40" FontWeight="Bold" Foreground="#4ADE80" Text="—" />
       </StackPanel>
 
-      <ProgressBar x:Name="RemainingBar" Height="8" Minimum="0" Maximum="100" Value="94"
+      <ProgressBar x:Name="RemainingBar" Height="8" Minimum="0" Maximum="100" Value="0"
                    Foreground="#22C55E" Background="#33FFFFFF" BorderThickness="0" />
 
       <TextBlock x:Name="DetailText" Margin="0,10,0,0" FontSize="13" Foreground="#E5E7EB"
-                 Text="周额度已用 6% · 额外 tokens 剩余 31B" />
+                 Text="右键登录 Muse 后显示实时额度" />
       <TextBlock x:Name="ResetText" Margin="0,4,0,0" FontSize="12" Foreground="#9CA3AF"
-                 Text="10 月 29 日 11:31 重置 · 还有 7 天" />
+                 Text="重置时间未知" />
       <TextBlock x:Name="StatusText" Margin="0,4,0,0" FontSize="11" Foreground="#6B7280"
-                 Text="数据更新于 10 月 22 日 16:25 · 拖动可移动，右键有菜单" />
+                 Text="未登录 Muse，右键登录 · 拖动可移动" />
     </StackPanel>
   </Border>
 </Window>
