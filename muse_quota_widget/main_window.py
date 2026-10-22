@@ -7,6 +7,12 @@
 窗体从 240 宽放大到 528 宽，右侧出现 RamanVista 风格的设置面板；
 再点齿轮或面板里的“完成”可收回。
 
+边缘停靠：把悬浮窗拖到屏幕边缘附近（40px 内）再双击，
+窗体滑到屏幕外、只在边缘留一条 8px 的线；鼠标划过这条线
+时窗体滑出来，鼠标离开窗体时又滑回去；把滑出来的窗体
+拖离边缘，就取消停靠、恢复成普通悬浮窗。设置面板展开时
+不触发停靠，点齿轮展开设置会先取消停靠。
+
 控件风格参考 RamanVista：深色表面 #2B2D33 / #25272D、
 边框 #606060、主色浅蓝 #4FC3F7、卡片圆角 12、按钮圆角 6、
 滑块拇指 #4FC3F7（不引 MaterialDesign 包，只复刻颜色与样式）。
@@ -189,6 +195,13 @@ class FloatingWindow(QWidget):
         self._is_settings_expanded = False
         self._suppress_slider_apply = False
         self._drag_pos = None
+        # 边缘停靠状态：_docked_edge 为 None = 未停靠，
+        # 否则为 'left'/'right'/'top'/'bottom'；_docked_hidden 为 True
+        # 表示当前正滑在屏幕外、只留一条线。
+        self._docked_edge = None
+        self._docked_hidden = False
+        self._dock_line = 8
+        self._dock_threshold = 40
         self._background_login = None
         self._fetch_thread = None
         self._fetch_worker = None
@@ -406,10 +419,20 @@ class FloatingWindow(QWidget):
     def eventFilter(self, watched, event):  # noqa: N802 - Qt 命名
         if isinstance(watched, (QPushButton, QSlider, QCheckBox)):
             return super().eventFilter(watched, event)
+        if event.type() == QEvent.MouseButtonDblClick and event.button() == Qt.LeftButton:
+            # 额度区双击 = 停靠/取消停靠；按钮上的双击不走这里，
+            # 上面已经按按钮原样放行了。
+            self._on_double_click()
+            return True
         if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             return True
         if event.type() == QEvent.MouseMove and self._drag_pos is not None and event.buttons() & Qt.LeftButton:
+            # 一拖动就取消停靠：拖离边缘后不再自动滑回，
+            # 想再停靠就拖回边缘重新双击。
+            if self._docked_edge is not None:
+                self._docked_edge = None
+                self._docked_hidden = False
             self.move(event.globalPosition().toPoint() - self._drag_pos)
             return True
         if event.type() == QEvent.MouseButtonRelease:
@@ -420,10 +443,19 @@ class FloatingWindow(QWidget):
 
     def enterEvent(self, event):  # noqa: N802
         self.gear_button.setVisible(True)
+        # 停靠在边缘、只留一条线时，鼠标划过这条线就滑出来。
+        # 窗体本身就是那条线：滑在外面时可见部分只有 8px，
+        # 鼠标进到这 8px 里就会触发 enterEvent。
+        if self._docked_edge is not None and self._docked_hidden:
+            self._reveal_docked()
         super().enterEvent(event)
 
     def leaveEvent(self, event):  # noqa: N802
         self.gear_button.setVisible(False)
+        # 停靠状态下，鼠标离开整个窗体就滑回去、只留线。
+        # 正在拖动时不滑回，否则拖动中窗体一动就被藏起来。
+        if self._docked_edge is not None and not self._docked_hidden and self._drag_pos is None:
+            self._hide_docked()
         super().leaveEvent(event)
 
     def resizeEvent(self, event):  # noqa: N802
@@ -446,8 +478,20 @@ class FloatingWindow(QWidget):
 
     def mouseMoveEvent(self, event: QMouseEvent):  # noqa: N802
         if self._drag_pos is not None and event.buttons() & Qt.LeftButton:
+            if self._docked_edge is not None:
+                self._docked_edge = None
+                self._docked_hidden = False
             self.move(event.globalPosition().toPoint() - self._drag_pos)
         super().mouseMoveEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent):  # noqa: N802
+        # 主窗体空白处双击也走停靠；点在按钮上时不触发。
+        child = self.childAt(event.position().toPoint())
+        if isinstance(child, (QPushButton, QSlider, QCheckBox)):
+            super().mouseDoubleClickEvent(event)
+            return
+        self._on_double_click()
+        super().mouseDoubleClickEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):  # noqa: N802
         self._drag_pos = None
@@ -458,6 +502,11 @@ class FloatingWindow(QWidget):
     def _toggle_settings(self) -> None:
         self._is_settings_expanded = not self._is_settings_expanded
         if self._is_settings_expanded:
+            # 展开设置面板时先取消停靠：528 宽的面板不适合滑到边外，
+            # 而且展开后鼠标离开再滑回会把设置面板也藏到边外。
+            # 此时窗体已经是滑出来的状态，取消后就留在屏幕内。
+            self._docked_edge = None
+            self._docked_hidden = False
             # 先恢复面板宽度再显示，否则面板还压在 0 宽上。
             self.settings_widget.setFixedWidth(300)
             self.settings_widget.setVisible(True)
@@ -486,6 +535,97 @@ class FloatingWindow(QWidget):
             f"settings toggled: expanded={self._is_settings_expanded} "
             f"width={self.width()} target={target_width}"
         )
+
+    # ---- 边缘停靠 ----
+
+    def _screen_geometry(self):
+        screen = self.screen()
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen is None:
+            return None
+        # availableGeometry 排除菜单栏 / Dock，占的是真正能看见的区域，
+        # 停靠到这里线才不会被系统栏盖住。
+        return screen.availableGeometry()
+
+    def _on_double_click(self) -> None:
+        # 设置面板展开时不触发停靠：528 宽的面板滑到边外没有意义，
+        # 先收起面板、再拖到边缘双击才是正常流程。
+        if self._is_settings_expanded:
+            return
+        if self._docked_edge is not None:
+            # 已停靠时再双击 = 取消停靠，窗体留在屏幕内不动。
+            self._docked_edge = None
+            self._docked_hidden = False
+            self._reveal_docked()
+            return
+        geom = self._screen_geometry()
+        if geom is None:
+            return
+        # 到四条边的距离，取最小的那条；离边超过阈值就不停靠，
+        # 避免在屏幕中间双击一下就把窗体藏到边上。
+        left_dist = self.x() - geom.x()
+        right_dist = (geom.x() + geom.width()) - (self.x() + self.width())
+        top_dist = self.y() - geom.y()
+        bottom_dist = (geom.y() + geom.height()) - (self.y() + self.height())
+        edge, dist = min(
+            (("left", left_dist), ("right", right_dist), ("top", top_dist), ("bottom", bottom_dist)),
+            key=lambda item: item[1],
+        )
+        if dist > self._dock_threshold:
+            return
+        self._docked_edge = edge
+        self._hide_docked()
+        diagnostics.log(f"docked to {edge} (dist={dist})")
+
+    def _docked_position(self):
+        """停靠时窗体左上角：屏幕外，只留 _dock_line 宽的线。"""
+        geom = self._screen_geometry()
+        if geom is None or self._docked_edge is None:
+            return None
+        line = self._dock_line
+        if self._docked_edge == "left":
+            return geom.x() - self.width() + line, self.y()
+        if self._docked_edge == "right":
+            return geom.x() + geom.width() - line, self.y()
+        if self._docked_edge == "top":
+            return self.x(), geom.y() - self.height() + line
+        return self.x(), geom.y() + geom.height() - line
+
+    def _revealed_position(self):
+        """滑出来时窗体左上角：贴着同一条边、完整显示在屏幕内。"""
+        geom = self._screen_geometry()
+        if geom is None or self._docked_edge is None:
+            return None
+        w, h = self.width(), self.height()
+        x, y = self.x(), self.y()
+        if self._docked_edge == "left":
+            x = geom.x()
+            y = max(geom.y(), min(y, geom.y() + geom.height() - h))
+        elif self._docked_edge == "right":
+            x = geom.x() + geom.width() - w
+            y = max(geom.y(), min(y, geom.y() + geom.height() - h))
+        elif self._docked_edge == "top":
+            y = geom.y()
+            x = max(geom.x(), min(x, geom.x() + geom.width() - w))
+        else:
+            y = geom.y() + geom.height() - h
+            x = max(geom.x(), min(x, geom.x() + geom.width() - w))
+        return x, y
+
+    def _hide_docked(self) -> None:
+        pos = self._docked_position()
+        if pos is None:
+            return
+        self._docked_hidden = True
+        self.move(pos[0], pos[1])
+
+    def _reveal_docked(self) -> None:
+        pos = self._revealed_position()
+        if pos is None:
+            return
+        self._docked_hidden = False
+        self.move(pos[0], pos[1])
 
     def _set_quota_mini(self, mini: bool) -> None:
         font = QFont()
@@ -678,6 +818,10 @@ class FloatingWindow(QWidget):
 
         self._show_pace(data, remaining)
         self._update_login_status()
+        # 停靠在外面时，额度刷新可能改变窗体高度（节奏区出现/消失），
+        # 高度变了停靠位置也要跟着重算，否则留的线会变宽或变窄。
+        if self._docked_edge is not None and self._docked_hidden:
+            self._hide_docked()
 
     def _show_pace(self, data: QuotaData, remaining: float) -> None:
         if data.weekly_reset_at is None:
