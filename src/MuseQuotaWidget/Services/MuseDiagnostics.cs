@@ -4,11 +4,13 @@ using System.Text.Json;
 namespace MuseQuotaWidget.Services;
 
 /// <summary>
-/// 本地诊断日志：只记“结构”，不记“值”。
+/// 本地诊断日志：默认只记“结构”，不记“值”。
 /// 记的东西：时间、阶段、HTTP 状态、返回体的字段名、字段类型、
 /// outcome / type / reason / state 这类状态词、有无令牌（布尔值）。
-/// 绝不记：访问令牌、viewer_id、session_binding_id、百分比、
-/// 词元余额、Cookie、任何能用来冒充登录的值。
+/// 绝不记：访问令牌、viewer_id、session_binding_id、Cookie、
+/// 任何能用来冒充登录的值。
+/// 例外：MuseSession.LogQuotaNumbers 那一行会记额度数值本身
+/// （百分比、词元余额等用户自己的额度，不是凭据），专门用于对数；
 /// 日志只写本机，不上传、不进仓库，用户自己决定要不要发出来。
 /// </summary>
 public static class MuseDiagnostics

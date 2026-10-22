@@ -10,6 +10,7 @@ public partial class MainWindow : Window
 {
     private readonly MuseSession _museSession = new();
     private readonly DispatcherTimer _refreshTimer;
+    private int _refreshIntervalMinutes;
     // 仅内存里的上次成功快照：刷新失败时继续显示它并提示，
     // 不会把它写盘，也不会把它当成新数据。
     private QuotaData? _lastGood;
@@ -18,13 +19,30 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        // 每 5 分钟刷新一次，只走 Muse 直连（内置登录）。
+        // 刷新频率默认 5 分钟，可在设置窗里拖滑块改（1-60 分钟），
+        // 保存在本地 settings.json；只走 Muse 直连（内置登录）。
         // 读额度接口不是对话，不产生对话 token。
-        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(5) };
+        _refreshIntervalMinutes = SettingsStore.LoadIntervalMinutes();
+        _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(_refreshIntervalMinutes) };
         _refreshTimer.Tick += async (_, _) => await LoadQuotaAsync();
         _refreshTimer.Start();
 
         _ = LoadQuotaAsync();
+    }
+
+    private void SetRefreshInterval(int minutes)
+    {
+        _refreshIntervalMinutes = Math.Clamp(minutes, 1, 60);
+        _refreshTimer.Interval = TimeSpan.FromMinutes(_refreshIntervalMinutes);
+        SettingsStore.SaveIntervalMinutes(_refreshIntervalMinutes);
+        if (_lastGood is { } last)
+        {
+            Show(last, "Muse 直连");
+        }
+        else
+        {
+            StatusText.Text = $"未登录 Muse，右键登录 · 每 {_refreshIntervalMinutes} 分钟刷新";
+        }
     }
 
     private async Task LoadQuotaAsync()
@@ -74,7 +92,7 @@ public partial class MainWindow : Window
         };
 
         PlanText.Text = data.Plan;
-        DetailText.Text = $"周额度已用 {data.UsedPercent:0}% · 额外 tokens 剩余 {data.AdditionalTokensLeft}";
+        DetailText.Text = $"已用 {data.UsedPercent:0}%";
 
         if (data.WeeklyResetAt is { } reset)
         {
@@ -91,9 +109,18 @@ public partial class MainWindow : Window
             ResetText.Text = "重置时间未知";
         }
 
+        // 额外词元单独一行、单独一条进度条，不再挤在周额度那行里。
+        // 注意：这里显示的是 hatch-api 的 topup_balance 换算值，
+        // 与 agent 侧 subscription-status 说的 31B 对不上时不要硬凑，
+        // 见 README 的“额外词元为什么是 12.4 亿”一节与诊断日志。
+        AdditionalText.Text = string.IsNullOrWhiteSpace(data.AdditionalTokensLeft)
+            ? "未知"
+            : $"剩余 {data.AdditionalTokensLeft}";
+        AdditionalBar.Value = Math.Clamp(100 - data.AdditionalTokensUsedPercent, 0, 100);
+
         StatusText.Text = data.UpdatedAt is { } updated
-            ? $"数据更新于 {updated:MM 月 dd 日 HH:mm} · 来源：{source}"
-            : $"来源：{source}";
+            ? $"数据更新于 {updated:MM 月 dd 日 HH:mm} · 来源：{source} · 每 {_refreshIntervalMinutes} 分钟刷新"
+            : $"来源：{source} · 每 {_refreshIntervalMinutes} 分钟刷新";
     }
 
     private void Card_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -126,6 +153,15 @@ public partial class MainWindow : Window
         StatusText.Text = "已断开 Muse 额度读取；网页登录 Cookie 仍在本地，下次登录无需重新输入密码。";
     }
 
+    private void Settings_Click(object sender, RoutedEventArgs e)
+    {
+        var settings = new SettingsWindow(_refreshIntervalMinutes) { Owner = this };
+        if (settings.ShowDialog() == true)
+        {
+            SetRefreshInterval(settings.SelectedMinutes);
+        }
+    }
+
     private void Topmost_Click(object sender, RoutedEventArgs e)
     {
         Topmost = TopmostMenuItem.IsChecked == true;
@@ -133,7 +169,8 @@ public partial class MainWindow : Window
 
     private void OpenDebugLog_Click(object sender, RoutedEventArgs e)
     {
-        // 诊断日志只在本机，里面只有字段名与状态词，没有令牌与账号 id。
+        // 诊断日志只在本机，里面没有令牌与账号 id；其中 quota numbers
+        // 那一行会记额度数值本身（用于对额外 token 的数），用户自愿发。
         if (System.IO.File.Exists(MuseDiagnostics.LogPath))
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(MuseDiagnostics.LogPath)

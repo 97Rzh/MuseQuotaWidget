@@ -54,6 +54,64 @@ public sealed class MuseSession
         }
     }
 
+    /// <summary>
+    /// 额外 token 对数专用：把 hatch-api 返回体里的数值字段原样记到
+    /// 诊断日志里（不记令牌、账号 id、Cookie），用于确认到底哪个字段
+    /// 才是 agent 侧说的 31B。数值本身是用户自己的额度，不是凭据，
+    /// 且日志只在本机，用户自己决定要不要发出来。
+    /// 注意：这里不做任何换算、不乘系数，看到什么就是什么，
+    /// 绝不为了凑 31 亿去硬改一个数。
+    /// </summary>
+    public static void LogQuotaNumbers(string body)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object)
+            {
+                return;
+            }
+
+            var parts = new List<string>();
+            void Collect(System.Text.Json.JsonElement obj, string prefix)
+            {
+                foreach (var prop in obj.EnumerateObject())
+                {
+                    var name = prop.Name.ToLowerInvariant();
+                    // 凭据类字段一律跳过，哪怕它恰好是数字。
+                    if (name.Contains("token") || name.Contains("viewer") || name.Contains("session")
+                        || name.Contains("auth") || name.Contains("id") && name != "tier_id")
+                    {
+                        continue;
+                    }
+
+                    if (prop.Value.ValueKind == System.Text.Json.JsonValueKind.Number
+                        && prop.Value.TryGetDouble(out var num))
+                    {
+                        parts.Add($"{prefix}{prop.Name}={num}");
+                    }
+                    else if (prop.Value.ValueKind == System.Text.Json.JsonValueKind.Object
+                        && (prefix == string.Empty || prefix == "usage."))
+                    {
+                        // 只深入一层 usage，避免把整棵树都展开。
+                        Collect(prop.Value, prefix + prop.Name + ".");
+                    }
+                }
+            }
+
+            Collect(root, string.Empty);
+            if (parts.Count > 0)
+            {
+                MuseDiagnostics.Log("quota numbers: " + string.Join(", ", parts));
+            }
+        }
+        catch
+        {
+            // 诊断失败不影响正常流程。
+        }
+    }
+
     public async Task<Models.QuotaData> FetchQuotaAsync()
     {
         var credential = Credential;
@@ -114,7 +172,11 @@ public sealed class MuseSession
 
         try
         {
-            return MuseApiDecoder.ParseQuota(body);
+            var data = MuseApiDecoder.ParseQuota(body);
+            // 每次成功也记一行数值字段（只记额度数值，不记凭据），
+            // 用于对额外 token 的数；日志会随刷新增长，可随时删除。
+            LogQuotaNumbers(body);
+            return data;
         }
         catch (MuseAuthException)
         {
