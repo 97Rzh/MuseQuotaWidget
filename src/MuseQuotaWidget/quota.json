@@ -1,0 +1,11 @@
+{
+  // 2026-10-22 查到的当前状态。改这几个数、保存，悬浮窗 5 分钟内自动刷新，
+  // 也可以右键点“刷新数据”立即刷新。
+  "plan": "免费版（无订阅）",
+  "usedPercent": 6,
+  "remainingPercent": 94,
+  "weeklyResetAt": "2026-10-29T11:31:00+08:00",
+  "additionalTokensLeft": "31B",
+  "additionalTokensUsedPercent": 0,
+  "updatedAt": "2026-10-22T16:25:00+08:00"
+}

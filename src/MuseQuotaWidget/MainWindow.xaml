@@ -1,0 +1,44 @@
+<Window x:Class="MuseQuotaWidget.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Muse 额度"
+        Width="272" Height="196"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" Topmost="True" ShowInTaskbar="True">
+  <Border x:Name="Card"
+          CornerRadius="16" Padding="16,14,16,12"
+          Background="#E81F2937" BorderBrush="#33FFFFFF" BorderThickness="1"
+          MouseLeftButtonDown="Card_MouseLeftButtonDown">
+    <Border.ContextMenu>
+      <ContextMenu>
+        <MenuItem Header="刷新数据" Click="Refresh_Click" />
+        <MenuItem x:Name="TopmostMenuItem" Header="始终置顶" IsCheckable="True" IsChecked="True" Click="Topmost_Click" />
+        <MenuItem Header="打开数据文件 (quota.json)" Click="OpenDataFile_Click" />
+        <Separator />
+        <MenuItem Header="退出" Click="Exit_Click" />
+      </ContextMenu>
+    </Border.ContextMenu>
+    <StackPanel>
+      <DockPanel>
+        <TextBlock Text="Muse 额度" FontSize="13" Foreground="#9CA3AF" />
+        <TextBlock x:Name="PlanText" DockPanel.Dock="Right" TextAlignment="Right"
+                   FontSize="12" Foreground="#9CA3AF" Text="免费版" />
+      </DockPanel>
+
+      <StackPanel Orientation="Horizontal" Margin="0,6,0,2" VerticalAlignment="Bottom">
+        <TextBlock Text="剩余" FontSize="14" Foreground="#D1D5DB" VerticalAlignment="Bottom" Margin="0,0,6,6" />
+        <TextBlock x:Name="RemainingText" FontSize="40" FontWeight="Bold" Foreground="#4ADE80" Text="94%" />
+      </StackPanel>
+
+      <ProgressBar x:Name="RemainingBar" Height="8" Minimum="0" Maximum="100" Value="94"
+                   Foreground="#22C55E" Background="#33FFFFFF" BorderThickness="0" />
+
+      <TextBlock x:Name="DetailText" Margin="0,10,0,0" FontSize="13" Foreground="#E5E7EB"
+                 Text="周额度已用 6% · 额外 tokens 剩余 31B" />
+      <TextBlock x:Name="ResetText" Margin="0,4,0,0" FontSize="12" Foreground="#9CA3AF"
+                 Text="10 月 29 日 11:31 重置 · 还有 7 天" />
+      <TextBlock x:Name="StatusText" Margin="0,4,0,0" FontSize="11" Foreground="#6B7280"
+                 Text="数据更新于 10 月 22 日 16:25 · 拖动可移动，右键有菜单" />
+    </StackPanel>
+  </Border>
+</Window>
