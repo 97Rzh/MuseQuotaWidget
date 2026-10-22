@@ -131,5 +131,21 @@ public partial class MainWindow : Window
         Topmost = TopmostMenuItem.IsChecked == true;
     }
 
+    private void OpenDebugLog_Click(object sender, RoutedEventArgs e)
+    {
+        // 诊断日志只在本机，里面只有字段名与状态词，没有令牌与账号 id。
+        if (System.IO.File.Exists(MuseDiagnostics.LogPath))
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(MuseDiagnostics.LogPath)
+            {
+                UseShellExecute = true,
+            });
+        }
+        else
+        {
+            StatusText.Text = "暂无诊断日志：请先在登录窗口点一次“验证登录并读取额度”。";
+        }
+    }
+
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
 }

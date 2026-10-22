@@ -58,6 +58,7 @@ public partial class LoginWindow : Window
     private async void VerifyButton_Click(object sender, RoutedEventArgs e)
     {
         VerifyButton.IsEnabled = false;
+        var stage = "登录检查";
         try
         {
             StatusText.Text = "正在检查 Muse 网页登录…";
@@ -73,6 +74,7 @@ public partial class LoginWindow : Window
             // credential 为 null 且已有同指纹旧令牌时，复用旧令牌
             // （ai-quota 注明：前端在重验证时可能不返回 access_token）。
 
+            stage = "额度读取";
             StatusText.Text = "网页登录已通过，正在读取真实额度…";
             var quota = await _session.FetchQuotaAsync();
             VerifiedQuota = quota;
@@ -88,12 +90,14 @@ public partial class LoginWindow : Window
                 _session.Clear();
             }
 
-            StatusText.Text = "验证未通过：" + ex.MessageZh;
+            // 阶段写进提示里：下次再报无法识别时，先看是登录检查
+            // 还是额度读取那一步，诊断日志里也有对应的结构记录。
+            StatusText.Text = $"验证未通过（{stage}）：{ex.MessageZh}（诊断日志：右键悬浮窗 → 打开诊断日志）";
             VerifyButton.IsEnabled = true;
         }
         catch (Exception ex)
         {
-            StatusText.Text = "验证未通过：网络请求失败或超时。请稍后重试。（" + ex.Message + "）";
+            StatusText.Text = $"验证未通过（{stage}）：网络请求失败或超时。请稍后重试。（{ex.Message}）";
             VerifyButton.IsEnabled = true;
         }
     }
@@ -117,6 +121,10 @@ public partial class LoginWindow : Window
             throw new MuseAuthException(MuseAuthKind.LoginRequired);
         }
 
+        // 返回 JSON 字符串（而不是对象）：WebView2 对异步脚本返回值的
+        // 序列化方式不稳定，返回字符串时解析路径是确定的。
+        // fetch 本身失败时也不让 Promise 直接拒绝，改成返回结构化错误，
+        // 否则 ExecuteScriptAsync 只会给一个 null，无法区分是哪一步。
         const string script = """
             (async () => {
               const controller = new AbortController();
@@ -133,7 +141,9 @@ public partial class LoginWindow : Window
                     if (Object.prototype.hasOwnProperty.call(json, key)) payload[key] = json[key];
                   }
                 }
-                return { httpStatus: response.status, payload: payload };
+                return JSON.stringify({ httpStatus: response.status, payload: payload });
+              } catch (e) {
+                return JSON.stringify({ httpStatus: 0, payload: { type: 'fetchFailed', reason: e && e.name ? e.name : 'unknown' } });
               } finally {
                 clearTimeout(timeout);
               }
@@ -169,6 +179,7 @@ public partial class LoginWindow : Window
                 || !root.TryGetProperty("payload", out var payload)
                 || payload.ValueKind != JsonValueKind.Object)
             {
+                MuseDiagnostics.Log($"auth invalid: script result keys=[{MuseDiagnostics.DescribeKeys(root)}]");
                 throw new MuseAuthException(MuseAuthKind.InvalidResponse);
             }
 
@@ -176,6 +187,13 @@ public partial class LoginWindow : Window
             string? GetStr(string name) =>
                 payload.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
                     ? v.GetString() : null;
+
+            // 只记结构不记值：状态码、字段名、outcome/type/reason、
+            // 有无令牌（布尔值）、binding 的类型，令牌与账号 id 一律不记。
+            MuseDiagnostics.Log($"auth: httpStatus={status} payload=[{MuseDiagnostics.DescribeKeys(payload)}] "
+                + $"outcome={GetStr("outcome") ?? "(none)"} type={GetStr("type") ?? "(none)"} "
+                + $"reason={GetStr("reason") ?? "(none)"} hasToken={!string.IsNullOrWhiteSpace(GetStr("access_token"))} "
+                + $"bindingKind={(payload.TryGetProperty("session_binding_id", out var bk) ? bk.ValueKind.ToString() : "(missing)")}");
 
             if (status == 401)
             {

@@ -89,7 +89,11 @@ public static class MuseApiDecoder
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        if (!TryGet(root, "usage", out var usage) || usage.ValueKind != JsonValueKind.Object)
+        // usage 优先在顶层找；若 hatch-api 实际把它包了一层
+        // （subscription / data / result），也接受，不直接判无法识别。
+        var container = root;
+        if ((!TryGet(root, "usage", out var usage) || usage.ValueKind != JsonValueKind.Object)
+            && !FindNestedUsage(root, out usage, out container))
         {
             throw new MuseAuthException(MuseAuthKind.InvalidResponse);
         }
@@ -113,8 +117,11 @@ public static class MuseApiDecoder
         };
         _ = state; // state 目前只用于区分：METERED 之外仍按已用百分比展示，不虚构。
 
-        var topupBalance = TryGetNumber(root, "topup_balance", "topupBalance");
-        var topupTotal = TryGetNumber(root, "topup_total", "topupTotal");
+        // topup 字段也可能跟 usage 一起被包在内层对象里。
+        var topupBalance = TryGetNumber(root, "topup_balance", "topupBalance")
+            ?? TryGetNumber(container, "topup_balance", "topupBalance");
+        var topupTotal = TryGetNumber(root, "topup_total", "topupTotal")
+            ?? TryGetNumber(container, "topup_total", "topupTotal");
         if (topupBalance is { } balance)
         {
             data.AdditionalTokensLeft = FormatTokens(balance);
@@ -124,7 +131,8 @@ public static class MuseApiDecoder
             }
         }
 
-        var label = TryGetString(root, "usage_row_label", "usageRowLabel");
+        var label = TryGetString(root, "usage_row_label", "usageRowLabel")
+            ?? TryGetString(container, "usage_row_label", "usageRowLabel");
         if (!string.IsNullOrWhiteSpace(label))
         {
             // usage_row_label 在中文界面下就是“免费版”一类的展示名，优先用它。
@@ -132,6 +140,24 @@ public static class MuseApiDecoder
         }
 
         return data;
+    }
+
+    private static bool FindNestedUsage(JsonElement root, out JsonElement usage, out JsonElement container)
+    {
+        usage = default;
+        container = root;
+        foreach (var wrapper in new[] { "subscription", "data", "result" })
+        {
+            if (TryGet(root, wrapper, out var inner) && inner.ValueKind == JsonValueKind.Object
+                && TryGet(inner, "usage", out var nested) && nested.ValueKind == JsonValueKind.Object)
+            {
+                usage = nested;
+                container = inner;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string FormatTokens(double balance)
@@ -215,10 +241,26 @@ public static class MuseApiDecoder
     {
         foreach (var name in names)
         {
-            if (TryGet(obj, name, out var value) && value.ValueKind == JsonValueKind.Number
+            if (!TryGet(obj, name, out var value))
+            {
+                continue;
+            }
+
+            // 数字直接取；字符串形式的数字（例如 "8"）也接受，
+            // 避免只因类型不同就判无法识别。
+            if (value.ValueKind == JsonValueKind.Number
                 && value.TryGetDouble(out var num) && double.IsFinite(num) && num >= 0)
             {
                 return num;
+            }
+
+            if (value.ValueKind == JsonValueKind.String
+                && double.TryParse(value.GetString(),
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+                && double.IsFinite(parsed) && parsed >= 0)
+            {
+                return parsed;
             }
         }
 

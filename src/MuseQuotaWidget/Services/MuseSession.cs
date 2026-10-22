@@ -27,6 +27,33 @@ public sealed class MuseSession
 
     public void Clear() => Credential = null;
 
+    private static void LogQuotaShape(string body)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            var line = $"quota invalid: top=[{MuseDiagnostics.DescribeKeys(root)}]";
+            if (root.ValueKind == System.Text.Json.JsonValueKind.Object
+                && root.TryGetProperty("usage", out var usage))
+            {
+                line += $" usage=[{MuseDiagnostics.DescribeKeys(usage)}]";
+                if (usage.ValueKind == System.Text.Json.JsonValueKind.Object
+                    && usage.TryGetProperty("state", out var state)
+                    && state.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    line += $" state={state.GetString()}";
+                }
+            }
+
+            MuseDiagnostics.Log(line);
+        }
+        catch
+        {
+            MuseDiagnostics.Log("quota invalid: body is not valid JSON");
+        }
+    }
+
     public async Task<Models.QuotaData> FetchQuotaAsync()
     {
         var credential = Credential;
@@ -91,10 +118,14 @@ public sealed class MuseSession
         }
         catch (MuseAuthException)
         {
+            // 只记结构不记值：顶层字段名、usage 字段名、state，
+            // 帮助定位是哪个字段对不上，令牌与数值一律不记。
+            LogQuotaShape(body);
             throw;
         }
         catch
         {
+            LogQuotaShape(body);
             throw new MuseAuthException(MuseAuthKind.InvalidResponse);
         }
     }

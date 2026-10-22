@@ -70,6 +70,15 @@ hatch-api 返回的 `resets_at` 格式需在 Windows 上第一次登录后
 2026-10-29 11:31 CST），若 hatch-api 的字段名或格式有出入，
 以第一次登录后的实际返回为准调整解码器。
 
+**验证失败时怎么定位：**登录窗口的提示现在会写明是“登录检查”
+还是“额度读取”那一步失败，并把结构记录写到本地诊断日志
+`%LOCALAPPDATA%\MuseQuotaWidget\muse-debug.log`（右键悬浮窗 →
+“打开诊断日志”）。日志里只有字段名、字段类型、HTTP 状态、
+outcome / type / reason / state 这类状态词，**没有令牌、
+没有账号 id、没有百分比与余额**，可以放心发出来；发的时候
+先看最后一行是 `auth:` 还是 `quota invalid:`，就知道是哪一步
+的返回体结构对不上。
+
 ## 开机自启（可选）
 
 把 Release 下 `MuseQuotaWidget.exe` 的快捷方式放进启动文件夹：

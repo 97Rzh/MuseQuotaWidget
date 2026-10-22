@@ -15,6 +15,7 @@
         <MenuItem Header="登录 Muse…" Click="Login_Click" />
         <MenuItem Header="退出登录" Click="Logout_Click" />
         <MenuItem x:Name="TopmostMenuItem" Header="始终置顶" IsCheckable="True" IsChecked="True" Click="Topmost_Click" />
+        <MenuItem Header="打开诊断日志" Click="OpenDebugLog_Click" />
         <Separator />
         <MenuItem Header="退出" Click="Exit_Click" />
       </ContextMenu>
