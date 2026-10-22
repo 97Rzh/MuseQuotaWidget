@@ -121,18 +121,22 @@ public partial class LoginWindow : Window
             throw new MuseAuthException(MuseAuthKind.LoginRequired);
         }
 
-        // 返回 JSON 字符串（而不是对象）：WebView2 对异步脚本返回值的
-        // 序列化方式不稳定，返回字符串时解析路径是确定的。
-        // fetch 本身失败时也不让 Promise 直接拒绝，改成返回结构化错误，
-        // 否则 ExecuteScriptAsync 只会给一个 null，无法区分是哪一步。
+        // 关键修正：WebView2 的 ExecuteScriptAsync 不等待异步脚本的
+        // Promise，上一版的 async IIFE 在这里只返回了一个空对象 {}，
+        // 诊断日志里的 script result keys=[(empty object)] 就是它。
+        // ai-quota 的 Swift callAsyncJavaScript 会等异步 JS，WebView2
+        // 不会，所以不能直接靠脚本返回值拿 fetch 结果。
+        // 改法：JS 同步启动 fetch，把结果写进 window 变量，C# 轮询
+        // 这个变量直到有值或超时，fetch 本身是 .then/.catch 链，
+        // 不依赖 C# 等待 Promise。
         const string script = """
-            (async () => {
+            (() => {
+              window.__museQuotaAuthResult = null;
               const controller = new AbortController();
-              const timeout = setTimeout(() => controller.abort(), 10000);
-              try {
-                const response = await fetch('/api/auth/check', {
-                  method: 'POST', credentials: 'include', cache: 'no-store', signal: controller.signal
-                });
+              setTimeout(() => controller.abort(), 10000);
+              fetch('/api/auth/check', {
+                method: 'POST', credentials: 'include', cache: 'no-store', signal: controller.signal
+              }).then(async (response) => {
                 let json = null;
                 try { json = await response.json(); } catch (e) { json = null; }
                 const payload = {};
@@ -141,34 +145,54 @@ public partial class LoginWindow : Window
                     if (Object.prototype.hasOwnProperty.call(json, key)) payload[key] = json[key];
                   }
                 }
-                return JSON.stringify({ httpStatus: response.status, payload: payload });
-              } catch (e) {
-                return JSON.stringify({ httpStatus: 0, payload: { type: 'fetchFailed', reason: e && e.name ? e.name : 'unknown' } });
-              } finally {
-                clearTimeout(timeout);
-              }
+                window.__museQuotaAuthResult = JSON.stringify({ httpStatus: response.status, payload: payload });
+              }).catch((e) => {
+                window.__museQuotaAuthResult = JSON.stringify({ httpStatus: 0, payload: { type: 'fetchFailed', reason: e && e.name ? e.name : 'unknown' } });
+              });
+              return 'started';
             })()
             """;
 
-        var raw = await WebView.ExecuteScriptAsync(script);
-        // ExecuteScriptAsync 返回的是 JS 结果的 JSON 序列化；若结果本身
-        // 是字符串，再解析一层。
-        string jsonText;
-        try
+        await WebView.ExecuteScriptAsync(script);
+
+        // 轮询 window 变量：同步脚本的返回值是确定的字符串或 null，
+        // 不再依赖异步返回值。15 秒内没值就是网络超时。
+        string? jsonText = null;
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
+        while (DateTimeOffset.UtcNow < deadline)
         {
-            using var first = JsonDocument.Parse(raw);
-            jsonText = first.RootElement.ValueKind == JsonValueKind.String
-                ? first.RootElement.GetString() ?? string.Empty
-                : raw;
-        }
-        catch
-        {
-            throw new MuseAuthException(MuseAuthKind.InvalidResponse);
+            if (WebView.CoreWebView2 is null)
+            {
+                throw new MuseAuthException(MuseAuthKind.NetworkUnavailable);
+            }
+
+            var rawPoll = await WebView.ExecuteScriptAsync("window.__museQuotaAuthResult");
+            try
+            {
+                using var pollDoc = JsonDocument.Parse(rawPoll);
+                if (pollDoc.RootElement.ValueKind == JsonValueKind.String)
+                {
+                    var value = pollDoc.RootElement.GetString();
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        jsonText = value;
+                        break;
+                    }
+                }
+                // ValueKind 是 Null 时表示 fetch 还没完成，继续轮询。
+            }
+            catch
+            {
+                // 轮询解析失败时不直接判错，等下一轮或超时。
+            }
+
+            await Task.Delay(250);
         }
 
         if (string.IsNullOrWhiteSpace(jsonText))
         {
-            throw new MuseAuthException(MuseAuthKind.InvalidResponse);
+            MuseDiagnostics.Log("auth timeout: window.__museQuotaAuthResult never set");
+            throw new MuseAuthException(MuseAuthKind.NetworkUnavailable);
         }
 
         using (var doc = JsonDocument.Parse(jsonText))
