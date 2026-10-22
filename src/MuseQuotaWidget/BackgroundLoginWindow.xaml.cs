@@ -13,7 +13,7 @@ namespace MuseQuotaWidget;
 /// 换到令牌或确认换不到后立即关闭自己，不常驻。
 /// 只有一种情况会失败后仍需手动登录：Cookie 已过期、被清除，
 /// 或 Muse 要求重新验证——那时后台窗不会弹出来打扰用户，
-/// 主窗口只显示“未登录”，用户右键手动登录即可。
+/// 主窗口只显示“未登录”，用户点齿轮 → 登录即可。
 /// </summary>
 public partial class BackgroundLoginWindow : Window
 {

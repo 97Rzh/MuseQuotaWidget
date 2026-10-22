@@ -86,7 +86,7 @@ public partial class LoginWindow : Window
 
             // 阶段写进提示里：下次再报无法识别时，先看是登录检查
             // 还是额度读取那一步，诊断日志里也有对应的结构记录。
-            StatusText.Text = $"验证未通过（{stage}）：{ex.MessageZh}（诊断日志：右键悬浮窗 → 打开诊断日志）";
+            StatusText.Text = $"验证未通过（{stage}）：{ex.MessageZh}（诊断日志：点齿轮 → 打开诊断日志）";
             VerifyButton.IsEnabled = true;
         }
         catch (Exception ex)
