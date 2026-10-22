@@ -20,7 +20,8 @@
 
 ## 运行（Mac / Windows）
 
-需要 Python 3.10+ 和 PySide6（Qt 悬浮窗 + QtWebEngine 登录窗）。
+需要 Python 3.10+ 和 PySide6 + PySide6-WebEngine
+（Qt 悬浮窗 + QtWebEngine 登录窗，两个包都要装，见 requirements.txt）。
 C# / WPF 版已整段删除，git 历史（5337ffe 及之前）里还能找回，
 不要再用 Visual Studio / dotnet 构建。
 
@@ -58,8 +59,10 @@ Windows：`%LOCALAPPDATA%\MuseQuotaWidget\QtWebEngine`）。
 后台登录才会失败，那时悬浮窗显示“未登录”，点齿轮 → 登录一次
 即可；面板里点“刷新数据”时若令牌已丢，也会先试一次后台登录。
 
-如果登录窗报 QtWebEngine 不可用：请重新安装 PySide6
-（`python3 -m pip install --force-reinstall PySide6`），
+如果登录窗报 QtWebEngine 不可用：不要只重装 PySide6，
+PySide6 6.12 起已拆包，基础包不含 WebEngine，要单独装
+（`python3 -m pip install PySide6-WebEngine`，Mac 上那个轮子
+约 250MB，装的时候要等一会儿），装完重启悬浮窗再登录。
 主悬浮窗仍能打开、只显示“未登录”，额度要等登录可用后才能读取。
 
 ## 设置面板（齿轮按钮，RamanVista 风格）
@@ -164,7 +167,7 @@ outcome / type / reason / state 这类状态词，**没有令牌、
 
 ```
 main.py                  # 入口
-requirements.txt         # PySide6
+requirements.txt         # PySide6 + PySide6-WebEngine
 run.sh / run.bat         # Mac / Windows 启动脚本
 muse_quota_widget/
   paths.py               # 平台本地路径（设置、日志、浏览器数据）

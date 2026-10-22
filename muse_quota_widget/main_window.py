@@ -45,7 +45,7 @@ from .pace import compute_pace
 from .pace_widget import PaceScaleWidget
 from .paths import log_path
 from .quota_api import MuseAuthException, MuseAuthKind, QuotaData
-from .webengine import try_import_webengine
+from .webengine import import_error, try_import_webengine
 
 # RamanVista 语义色
 SURFACE = "#2B2D33"
@@ -533,10 +533,15 @@ class FloatingWindow(QWidget):
 
     def _on_login_clicked(self) -> None:
         if try_import_webengine()[0] is None:
+            # 以前这里只说“重新安装 PySide6”，把真实原因藏起来了，
+            # 导致用户按提示重装了 PySide6 还是缺 WebEngine。
+            # 现在把真实导入错误打出来，并直接给对的包名。
+            detail = import_error() or "未知导入错误"
             QMessageBox.warning(
                 self,
                 "登录不可用",
-                "QtWebEngine 不可用：请重新安装 PySide6 后再试。\n"
+                f"QtWebEngine 不可用：{detail}\n"
+                "请运行：python3 -m pip install PySide6-WebEngine 后再试。\n"
                 "主悬浮窗仍可打开，额度要等登录可用后才能读取。",
             )
             return

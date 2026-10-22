@@ -20,7 +20,7 @@ from . import diagnostics
 from .muse_session import MuseSession
 from .quota_api import MuseAuthException, MuseAuthKind, MuseCredential
 from .web_auth import AUTH_JS, POLL_JS, process_auth_result
-from .webengine import get_profile, try_import_webengine
+from .webengine import get_profile, import_error, try_import_webengine
 
 
 class BackgroundLogin(QObject):
@@ -41,7 +41,7 @@ class BackgroundLogin(QObject):
     def start(self) -> None:
         QWebEngineView, QWebEnginePage, _ = try_import_webengine()
         if QWebEngineView is None or QWebEnginePage is None:
-            diagnostics.log("background login failed: QtWebEngine unavailable")
+            diagnostics.log(f"background login failed: QtWebEngine unavailable: {import_error() or 'unknown'}")
             self.finished.emit(None)
             return
         try:

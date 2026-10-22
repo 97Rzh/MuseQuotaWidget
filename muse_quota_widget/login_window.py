@@ -24,7 +24,7 @@ from . import diagnostics
 from .muse_session import MuseSession
 from .quota_api import MuseAuthException, MuseAuthKind, QuotaData
 from .web_auth import AUTH_JS, POLL_JS, process_auth_result
-from .webengine import get_profile, try_import_webengine
+from .webengine import get_profile, import_error, try_import_webengine
 
 
 class LoginDialog(QDialog):
@@ -46,7 +46,8 @@ class LoginDialog(QDialog):
         QWebEngineView, QWebEnginePage, _ = try_import_webengine()
         if QWebEngineView is None or QWebEnginePage is None:
             self._webview = None
-            layout.addWidget(QLabel("QtWebEngine 不可用：请重新安装 PySide6 后再试。"))
+            detail = import_error() or "未知导入错误"
+            layout.addWidget(QLabel(f"QtWebEngine 不可用：{detail}\n请运行：python3 -m pip install PySide6-WebEngine 后再试。"))
         else:
             self._webview = QWebEngineView(self)
             self._webview.setPage(QWebEnginePage(get_profile(), self._webview))
