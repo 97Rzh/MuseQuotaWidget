@@ -37,11 +37,11 @@ public partial class MainWindow : Window
         SettingsStore.SaveIntervalMinutes(_refreshIntervalMinutes);
         if (_lastGood is { } last)
         {
-            Show(last, "Muse 直连");
+            Show(last);
         }
         else
         {
-            StatusText.Text = $"未登录 Muse，右键登录 · 每 {_refreshIntervalMinutes} 分钟刷新";
+            TimeText.Text = "未登录";
         }
     }
 
@@ -49,9 +49,9 @@ public partial class MainWindow : Window
     {
         if (!_museSession.HasToken)
         {
-            StatusText.Text = _lastGood is null
-                ? "未登录 Muse，右键登录"
-                : "未登录 Muse，显示上次数据";
+            // 未登录时只显示“未登录”，百分比保持上次的（或初始的 —），
+            // 不拿旧数据冒充新数据。
+            TimeText.Text = "未登录";
             return;
         }
 
@@ -59,68 +59,45 @@ public partial class MainWindow : Window
         {
             var museData = await _museSession.FetchQuotaAsync();
             _lastGood = museData;
-            Show(museData, "Muse 直连");
+            Show(museData);
         }
         catch (MuseAuthException ex) when (ex.Kind is MuseAuthKind.LoginRequired
             or MuseAuthKind.AccountChanged or MuseAuthKind.TokenUnavailable)
         {
-            // 登录失效时清掉内存令牌，不再用旧数据冒充新数据。
+            // 登录失效时清掉内存令牌；时间行只写短提示，
+            // 百分比与条保持上次成功值，不清空。
             _museSession.Clear();
-            StatusText.Text = _lastGood is null
-                ? "Muse 登录已失效，请右键重新登录"
-                : "Muse 登录已失效，显示上次数据，请右键重新登录";
+            TimeText.Text = "登录已失效";
         }
-        catch (MuseAuthException ex)
+        catch (MuseAuthException)
         {
             // 网络、限流等临时失败：不丢令牌，下次定时刷新再试。
-            StatusText.Text = _lastGood is null
-                ? $"额度读取失败：{ex.MessageZh}"
-                : $"额度读取失败，显示上次数据：{ex.MessageZh}";
+            TimeText.Text = "读取失败";
         }
     }
 
-    private void Show(QuotaData data, string source)
+    private void Show(QuotaData data)
     {
+        // 极简版：只显示周额度剩余百分比 + 一条，不显示标题、
+        // 计划、已用、额外词元等任何字样。时间行只放刷新时间
+        // （每周额度重置时间），不带任何前缀字样。
         var remaining = Math.Clamp(data.Remaining, 0, 100);
         RemainingText.Text = $"{remaining:0}%";
         RemainingBar.Value = remaining;
-        RemainingText.Foreground = remaining switch
+        var brush = remaining switch
         {
             < 20 => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xF8, 0x71, 0x71)),
             < 50 => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xFB, 0xBF, 0x24)),
             _ => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x4A, 0xDE, 0x80)),
         };
+        RemainingText.Foreground = brush;
+        RemainingBar.Foreground = brush;
 
-        PlanText.Text = data.Plan;
-        DetailText.Text = $"已用 {data.UsedPercent:0}%";
-
-        if (data.WeeklyResetAt is { } reset)
-        {
-            var countdown = reset - DateTimeOffset.Now;
-            var countdownText = countdown.TotalSeconds <= 0
-                ? "已过重置时间，请更新数据"
-                : countdown.TotalDays >= 1
-                    ? $"还有 {countdown.Days} 天 {countdown.Hours} 小时"
-                    : $"还有 {countdown.Hours} 小时 {countdown.Minutes} 分钟";
-            ResetText.Text = $"{reset:MM 月 dd 日 HH:mm} 重置 · {countdownText}";
-        }
-        else
-        {
-            ResetText.Text = "重置时间未知";
-        }
-
-        // 额外词元单独一行、单独一条进度条，不再挤在周额度那行里。
-        // 注意：这里显示的是 hatch-api 的 topup_balance 换算值，
-        // 与 agent 侧 subscription-status 说的 31B 对不上时不要硬凑，
-        // 见 README 的“额外词元为什么是 12.4 亿”一节与诊断日志。
-        AdditionalText.Text = string.IsNullOrWhiteSpace(data.AdditionalTokensLeft)
-            ? "未知"
-            : $"剩余 {data.AdditionalTokensLeft}";
-        AdditionalBar.Value = Math.Clamp(100 - data.AdditionalTokensUsedPercent, 0, 100);
-
-        StatusText.Text = data.UpdatedAt is { } updated
-            ? $"数据更新于 {updated:MM 月 dd 日 HH:mm} · 来源：{source} · 每 {_refreshIntervalMinutes} 分钟刷新"
-            : $"来源：{source} · 每 {_refreshIntervalMinutes} 分钟刷新";
+        // 刷新时间：解码时已转本地时间，这里再转一次是幂等的，
+        // 保证 UTC 返回的时间显示为本地时间（+8），不显示 UTC。
+        TimeText.Text = data.WeeklyResetAt is { } reset
+            ? $"{reset.ToLocalTime():MM-dd HH:mm}"
+            : string.Empty;
     }
 
     private void Card_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -139,7 +116,7 @@ public partial class MainWindow : Window
         if (login.ShowDialog() == true && login.VerifiedQuota is { } quota)
         {
             _lastGood = quota;
-            Show(quota, "Muse 直连");
+            Show(quota);
         }
     }
 
@@ -150,7 +127,7 @@ public partial class MainWindow : Window
         // 可直接验证，无需重新输入密码。彻底退出请手动删除
         // %LOCALAPPDATA%\MuseQuotaWidget\WebView2 文件夹。
         _museSession.Clear();
-        StatusText.Text = "已断开 Muse 额度读取；网页登录 Cookie 仍在本地，下次登录无需重新输入密码。";
+        TimeText.Text = "未登录";
     }
 
     private void Settings_Click(object sender, RoutedEventArgs e)
@@ -180,7 +157,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            StatusText.Text = "暂无诊断日志：请先在登录窗口点一次“验证登录并读取额度”。";
+            TimeText.Text = "无诊断日志";
         }
     }
 

@@ -174,19 +174,23 @@ public static class MuseApiDecoder
 
     private static DateTimeOffset? ParseReset(JsonElement usage)
     {
-        // 字符串：ai-quota 只认带日期或带时区偏移的 ISO 格式，照搬。
+        // 字符串：ai-quota 只认带日期或带时区偏移的 ISO 格式，照搬，
+        // 但一律转本地时间显示——之前直接按原偏移格式化，Unix/ISO 的
+        // UTC 时间就原样显示成了 UTC，比本地晚 8 小时。
         if (TryGetString(usage, "resets_at", "resetsAt") is { } raw && !string.IsNullOrWhiteSpace(raw))
         {
             if (DateTimeOffset.TryParse(raw, out var parsed))
             {
-                return parsed;
+                return parsed.ToLocalTime();
             }
 
             if (DateTime.TryParseExact(raw, "yyyy-MM-dd", CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal, out var day))
+                DateTimeStyles.None, out var day))
             {
-                // 只有日期、没有时刻时，只精确到天，显示为当天零点（UTC）。
-                return new DateTimeOffset(day, TimeSpan.Zero);
+                // 只有日期、没有时刻时，只精确到天，显示为本地当天零点，
+                // 不按 UTC 零点再转本地（那样会变成当天 08:00）。
+                var offset = TimeZoneInfo.Local.GetUtcOffset(day);
+                return new DateTimeOffset(day, offset);
             }
 
             return null;
@@ -200,9 +204,11 @@ public static class MuseApiDecoder
         {
             try
             {
-                return num >= 100_000_000_000
+                // Unix 时间戳本身是 UTC，转本地后才是用户看到的时间
+                // （例如 1793244675 秒 = UTC 03:31 = 本地 11:31）。
+                return (num >= 100_000_000_000
                     ? DateTimeOffset.FromUnixTimeMilliseconds((long)num)
-                    : DateTimeOffset.FromUnixTimeSeconds((long)num);
+                    : DateTimeOffset.FromUnixTimeSeconds((long)num)).ToLocalTime();
             }
             catch
             {
