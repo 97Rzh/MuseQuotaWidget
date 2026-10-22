@@ -11,6 +11,9 @@ public partial class MainWindow : Window
     private readonly MuseSession _museSession = new();
     private readonly DispatcherTimer _refreshTimer;
     private int _refreshIntervalMinutes;
+    // 节奏白点在刻度上的位置（0 = 最左 Δ=-25，1 = 最右 Δ=+25），
+    // 刻度宽度变化时（窗口布局完成后）靠它重新定位白点。
+    private double _paceFraction = 0.5;
     // 仅内存里的上次成功快照：刷新失败时继续显示它并提示，
     // 不会把它写盘，也不会把它当成新数据。
     private QuotaData? _lastGood;
@@ -128,6 +131,108 @@ public partial class MainWindow : Window
         TimeText.Text = data.WeeklyResetAt is { } reset
             ? $"{reset.ToLocalTime():MM-dd HH:mm}"
             : string.Empty;
+
+        ShowPace(data, remaining);
+    }
+
+    /// <summary>
+    /// 第二版用量节奏控件：只显示与平均线的偏差，不重复显示已用%。
+    /// 平均线：周期按 7 天计，起点 = 重置时间 - 7 天，
+    /// 平均应为 = 已过天数 / 7 × 100%；差值 Δ = 已用% - 平均应为%。
+    /// 颜色只看 Δ（百分点，不用比值，避免周期初期比值爆炸）：
+    /// Δ ≤ -5 绿、-5 ~ +5 黄持平、+5 ~ +20 橙、≥ +20 深红。
+    /// 白点位置：Δ 钳制到 [-25, +25] 再映射到刻度 0 ~ 100%，中央 = Δ0。
+    /// 预计用完：按当前速度（已用 / 已过天数）外推，不是承诺，
+    /// 速度一变它就变；已过天数为 0 时算不出速度，只写快/慢。
+    /// 重置时间拿不到时整个节奏面板隐藏。
+    /// 注意：节奏按现在这一刻算，不按快照的更新时间算，
+    /// 所以时间过去后即使额度没刷新，节奏也会跟着动。
+    /// </summary>
+    private void ShowPace(QuotaData data, double remaining)
+    {
+        if (data.WeeklyResetAt is not { } reset)
+        {
+            PacePanel.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var resetLocal = reset.ToLocalTime();
+        var cycleStart = resetLocal.AddDays(-7);
+        var elapsedDays = Math.Clamp((DateTimeOffset.Now - cycleStart).TotalDays, 0, 7);
+        var expected = elapsedDays / 7 * 100;
+        var used = 100 - remaining;
+        var delta = used - expected;
+
+        var paceBrush = delta switch
+        {
+            <= -20 => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x22, 0xC5, 0x5E)),
+            <= -5 => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x4A, 0xDE, 0x80)),
+            <= 5 => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xEA, 0xB3, 0x08)),
+            <= 20 => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xF9, 0x73, 0x16)),
+            _ => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xEF, 0x44, 0x44)),
+        };
+        PaceText.Foreground = paceBrush;
+
+        var paceLabel = delta switch
+        {
+            <= -5 => $"慢 {Math.Abs(delta):0}%",
+            >= 5 => $"快 {delta:0}%",
+            _ => "持平",
+        };
+
+        string? projected = null;
+        if (elapsedDays > 0)
+        {
+            var speed = used / elapsedDays;
+            if (speed <= 0)
+            {
+                projected = "预计重置时还剩 100%";
+            }
+            else
+            {
+                var daysTo100 = 100 / speed;
+                if (daysTo100 <= 7)
+                {
+                    var daysEarly = 7 - daysTo100;
+                    projected = daysEarly <= 0.05
+                        ? "预计正好在重置时用完"
+                        : $"预计提前 {daysEarly:0.0} 天用完";
+                }
+                else
+                {
+                    var remainingAtReset = Math.Clamp(100 - speed * 7, 0, 100);
+                    projected = $"预计重置时还剩 {remainingAtReset:0}%";
+                }
+            }
+        }
+
+        PaceText.Text = projected is null ? paceLabel : $"{paceLabel} · {projected}";
+
+        _paceFraction = (Math.Clamp(delta, -25, 25) + 25) / 50;
+        PacePanel.Visibility = Visibility.Visible;
+        PacePanel.UpdateLayout();
+        PositionPaceDot();
+    }
+
+    /// <summary>
+    /// 按 _paceFraction 定位白点：白点中心对准刻度上的对应位置，
+    /// 两端钳制在刻度内。布局完成前 ActualWidth 为 0 时，
+    /// 按窗口宽度（240 - 左右内边距 16×2 = 208）估算，
+    /// 布局完成后的 SizeChanged 会再纠正一次。
+    /// </summary>
+    private void PositionPaceDot()
+    {
+        var scaleWidth = PaceScaleGrid.ActualWidth > 0 ? PaceScaleGrid.ActualWidth : 208;
+        var marginLeft = Math.Clamp(_paceFraction * scaleWidth - PaceDot.Width / 2, 0, scaleWidth - PaceDot.Width);
+        PaceDot.Margin = new Thickness(marginLeft, 0, 0, 0);
+    }
+
+    private void PaceScaleGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (PacePanel.Visibility == Visibility.Visible)
+        {
+            PositionPaceDot();
+        }
     }
 
     private void Card_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -170,6 +275,7 @@ public partial class MainWindow : Window
         // %LOCALAPPDATA%\MuseQuotaWidget\WebView2 文件夹。
         _museSession.Clear();
         TimeText.Text = "未登录";
+        PacePanel.Visibility = Visibility.Collapsed;
     }
 
     private void Settings_Click(object sender, RoutedEventArgs e)
