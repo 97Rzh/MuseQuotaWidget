@@ -179,6 +179,10 @@ class FloatingWindow(QWidget):
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.resize(240, 180)
+        # 宽度由设置面板开关控制，不由布局说了算：Mac 上只调 resize()
+        # 会被布局最小宽度顶住，收回后仍停在 528 宽（2026-10-23 实测）。
+        # 固定宽度后，节奏文字再长、设置面板再宽都撑不开窗体。
+        self.setFixedWidth(240)
 
         self._session = MuseSession()
         self._last_good: Optional[QuotaData] = None
@@ -454,15 +458,23 @@ class FloatingWindow(QWidget):
     def _toggle_settings(self) -> None:
         self._is_settings_expanded = not self._is_settings_expanded
         if self._is_settings_expanded:
+            # 先恢复面板宽度再显示，否则面板还压在 0 宽上。
+            self.settings_widget.setFixedWidth(300)
             self.settings_widget.setVisible(True)
             self._set_quota_mini(True)
             self._update_login_status()
             target_width = 528
         else:
             self.settings_widget.setVisible(False)
+            # 只隐藏不够：布局最小宽度仍可能把 300 宽的面板算进去，
+            # 收回后窗体就被顶在 528 宽下不来。直接把面板宽度压到 0。
+            self.settings_widget.setFixedWidth(0)
             self._set_quota_mini(False)
             target_width = 240
-        # 高度随内容自适应：先让布局算出新高度，再按目标宽度重设。
+        # 宽度用固定宽度强制，不用 resize()：resize() 会被布局
+        # 最小宽度钳制，Mac 上收回时就卡在展开宽度。高度仍自适应，
+        # 以免节奏区出现/消失时把内容裁掉。
+        self.setFixedWidth(target_width)
         self.updateGeometry()
         QApplication.processEvents()
         height = self.sizeHint().height()
@@ -470,6 +482,10 @@ class FloatingWindow(QWidget):
         height = max(height, self.quota_widget.sizeHint().height() + 30)
         self.resize(target_width, height)
         self.gear_button.move(self.width() - 16 - 28, 14)
+        diagnostics.log(
+            f"settings toggled: expanded={self._is_settings_expanded} "
+            f"width={self.width()} target={target_width}"
+        )
 
     def _set_quota_mini(self, mini: bool) -> None:
         font = QFont()
