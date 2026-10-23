@@ -7,6 +7,10 @@
 白点位置：Δ 钳制到 [-25, +25] 再映射到刻度 0 ~ 1，中央 = Δ0。
 预计用完：按当前速度（已用 / 已过天数）外推，不是承诺，
 速度一变它就变；已过天数为 0 时算不出速度，只写快/慢。
+预计日期时间有限制：只在预计用完时间落在重置时间之前
+（含正好等于重置时间）时才写“预计 MM-dd HH:mm 用完”；
+预计用完时间在重置时间之后时不写那个日期（重置会先到），
+改写“预计重置时还剩 X%”。所以预计日期永远不会超出重置时间。
 """
 
 from __future__ import annotations
@@ -68,13 +72,17 @@ def compute_pace(reset_local: datetime, now: datetime, remaining: float) -> Pace
         else:
             days_to_100 = 100 / speed
             if days_to_100 <= 7:
-                days_early = 7 - days_to_100
-                projected = (
-                    "预计正好在重置时用完"
-                    if days_early <= 0.05
-                    else f"预计提前 {days_early:.1f} 天用完"
-                )
+                # 快时不再写“提前 X 天”，直接写预计用完的日期时间，
+                # 格式跟重置时间一致：MM-dd HH:mm，不带秒。
+                # days_to_100 <= 7 保证这个时间不超出重置时间；
+                # 正好等于 7 时就是重置时间本身，不用再写“正好”。
+                projected_finish = cycle_start + timedelta(days=days_to_100)
+                if projected_finish > reset_local:
+                    projected_finish = reset_local
+                projected = f"预计 {projected_finish:%m-%d %H:%M} 用完"
             else:
+                # 慢时预计用完在重置之后，重置会先到，所以不写那个日期，
+                # 只写重置时还剩多少，这就是对预计日期时间的限制。
                 remaining_at_reset = max(0.0, min(100.0, 100 - speed * 7))
                 projected = f"预计重置时还剩 {remaining_at_reset:.0f}%"
 
