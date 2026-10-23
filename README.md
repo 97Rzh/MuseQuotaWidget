@@ -40,6 +40,26 @@ cd ~/Desktop/MuseQuotaWidget
 最新版 PyInstaller（PyInstaller 6.5 起已在 Mac 上关掉 QtWebEngine
 沙箱，避免 QtWebEngineProcess 崩溃），再把报错贴出来。
 
+## 打包成 Windows 程序（.exe）
+
+Windows 版用 `build_windows.bat`，不用 `iconutil` / `.icns`，
+图标直接用已有的 `assets\icon.ico`。在 Windows 上跑（双击
+文件资源管理器里的 `build_windows.bat` 也行，脚本会自动切到
+自己所在的目录）：
+
+```powershell
+cd E:\Project\MuseQuotaWidget
+.\build_windows.bat
+```
+
+这一步会先装依赖和 PyInstaller，再用 PyInstaller `--windowed`
+打出 `dist\MuseQuotaWidget\MuseQuotaWidget.exe`。跟 Mac 一样
+不用 `--onefile`：QtWebEngine 的子进程要跟 exe 放在一起，
+`dist\MuseQuotaWidget\` 整个文件夹就是程序，exe 不能单独拷走。
+打出来的 exe 没有签名，第一次打开 Windows 可能会弹 SmartScreen，
+点“更多信息”再点“仍要运行”就行。设置、日志、浏览器 Cookie
+还是存在 `%LOCALAPPDATA%\MuseQuotaWidget\`，跟终端版同一套。
+
 **唯一数据来源是 Muse 直连（内置登录），没有 GitHub 快照、
 没有本地数据文件、没有手动填数。**未登录时只显示“未登录”，
 不拿旧数据冒充新数据；刷新失败时继续显示内存里
