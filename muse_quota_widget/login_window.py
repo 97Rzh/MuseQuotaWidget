@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import QTimer, QUrl, Qt
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QDialog,
     QLabel,
@@ -25,6 +26,30 @@ from .muse_session import MuseSession
 from .quota_api import MuseAuthException, MuseAuthKind, QuotaData
 from .web_auth import AUTH_JS, POLL_JS, process_auth_result
 from .webengine import get_profile, import_error, try_import_webengine
+
+# 验证按钮样式：跟设置面板里的主按钮同一个 RamanVista 语义，
+# 主色浅蓝 #4FC3F7、深色字 #101010，之前这里没设任何样式，
+# 走的是系统默认的浅灰按钮，在登录窗里一点都不像主操作。
+# 悬停变亮、按下变深、禁用变灰，三个状态都写明，避免只改
+# 正常态、禁用时还是系统灰、看起来像没反应。
+VERIFY_BUTTON_STYLE = """
+QPushButton {
+  background-color: #4FC3F7;
+  color: #101010;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: bold;
+  min-height: 20px;
+}
+QPushButton:hover { background-color: #6ED0F9; }
+QPushButton:pressed { background-color: #2E9BD6; }
+QPushButton:disabled {
+  background-color: #3A3D45;
+  color: #AEB4C0;
+}
+"""
 
 
 class LoginDialog(QDialog):
@@ -59,6 +84,8 @@ class LoginDialog(QDialog):
         layout.addWidget(self.status_label)
 
         self.verify_button = QPushButton("验证登录并读取额度")
+        self.verify_button.setStyleSheet(VERIFY_BUTTON_STYLE)
+        self.verify_button.setCursor(QCursor(Qt.PointingHandCursor))
         self.verify_button.clicked.connect(self._on_verify_clicked)
         if self._webview is None:
             self.verify_button.setEnabled(False)
