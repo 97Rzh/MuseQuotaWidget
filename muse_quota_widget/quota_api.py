@@ -151,9 +151,12 @@ def _format_tokens(balance: float) -> str:
 # user/account/profile/viewer 对象里也找一层。
 _ACCOUNT_KEYS = (
     "email", "user_email", "account_email", "primary_email",
-    "username", "user_name", "account_name", "profile_name",
-    "display_name", "displayName", "name",
-    "phone", "phone_number", "mobile",
+    "email_address", "emailAddress", "userEmail", "accountEmail",
+    "username", "user_name", "userName", "account_name", "accountName",
+    "profile_name", "profileName",
+    "display_name", "displayName", "full_name", "fullName", "name",
+    "nickname", "nickName",
+    "phone", "phone_number", "phoneNumber", "mobile",
 )
 _ACCOUNT_CONTAINERS = ("user", "account", "profile", "viewer")
 
@@ -184,8 +187,8 @@ def extract_account(obj: Any) -> Optional[str]:
         found = _clean_account(obj.get(key))
         if found:
             return found
-    first = _clean_account(obj.get("first_name"))
-    last = _clean_account(obj.get("last_name"))
+    first = _clean_account(obj.get("first_name")) or _clean_account(obj.get("firstName"))
+    last = _clean_account(obj.get("last_name")) or _clean_account(obj.get("lastName"))
     if first and last:
         return f"{first} {last}"
     if first:
@@ -290,6 +293,18 @@ def parse_quota(body: str) -> QuotaData:
             data.additional_tokens_used_percent = max(0.0, min(100.0, 100 * (1 - topup_balance / topup_total)))
 
     data.account = extract_account(root) or extract_account(container) or extract_account(usage)
+    if data.account is None:
+        # 账号取不到时才记一次字段名（仅键名，不含值），供下次按真实键名取；
+        # 取到了就不记，避免每次刷新都刷屏。
+        _shape = f"quota shape: top=[{diagnostics.describe_keys(root)}] usage=[{diagnostics.describe_keys(usage)}]"
+        for _c in _ACCOUNT_CONTAINERS:
+            _inner = root.get(_c) if isinstance(root, dict) else None
+            if isinstance(_inner, dict):
+                _shape += f" {_c}=[{diagnostics.describe_keys(_inner)}]"
+            _inner2 = container.get(_c) if isinstance(container, dict) else None
+            if isinstance(_inner2, dict) and _inner2 is not _inner:
+                _shape += f" container.{_c}=[{diagnostics.describe_keys(_inner2)}]"
+        diagnostics.log(_shape)
 
     label = _try_get_string(root, "usage_row_label", "usageRowLabel")
     if label is None:

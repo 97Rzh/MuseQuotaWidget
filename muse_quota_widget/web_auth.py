@@ -30,12 +30,21 @@ AUTH_JS = """
     let json = null;
     try { json = await response.json(); } catch (e) { json = null; }
     const payload = {};
+    // 账号字段定位用：除了上面白名单的值，还把全部字段名（仅键名，
+    // 不含任何值）和嵌套 user/account/profile/viewer 的字段名一起上报，
+    // 这样响应里即使有个我们没列出的账号键，也能在日志里看到它的名字，
+    // 下一版按那个真实键名取，不用再猜。
+    const allKeys = (json && typeof json === 'object') ? Object.keys(json) : [];
+    const nestedKeys = {};
+    for (const ck of ['user', 'account', 'profile', 'viewer']) {
+      if (json && json[ck] && typeof json[ck] === 'object' && !Array.isArray(json[ck])) nestedKeys[ck] = Object.keys(json[ck]);
+    }
     if (json && typeof json === 'object') {
-      for (const key of ['outcome', 'access_token', 'viewer_id', 'session_binding_id', 'type', 'reason', 'status', 'email', 'user_email', 'account_email', 'username', 'user_name', 'display_name', 'name', 'phone', 'phone_number', 'user', 'account', 'profile']) {
+      for (const key of ['outcome', 'access_token', 'viewer_id', 'session_binding_id', 'type', 'reason', 'status', 'email', 'user_email', 'account_email', 'email_address', 'emailAddress', 'username', 'user_name', 'userName', 'display_name', 'displayName', 'full_name', 'fullName', 'name', 'nickname', 'phone', 'phone_number', 'phoneNumber', 'user', 'account', 'profile']) {
         if (Object.prototype.hasOwnProperty.call(json, key)) payload[key] = json[key];
       }
     }
-    window.__museQuotaAuthResult = JSON.stringify({ httpStatus: response.status, payload: payload });
+    window.__museQuotaAuthResult = JSON.stringify({ httpStatus: response.status, payload: payload, allKeys: allKeys, nestedKeys: nestedKeys });
   }).catch((e) => {
     window.__museQuotaAuthResult = JSON.stringify({ httpStatus: 0, payload: { type: 'fetchFailed', reason: e && e.name ? e.name : 'unknown' } });
   });
@@ -128,11 +137,17 @@ def process_auth_result(
                 break
         else:
             _account_field = "nested-or-jwt"
+    _all_keys = root.get("allKeys")
+    _all_keys_text = ",".join(_all_keys) if isinstance(_all_keys, list) and all(isinstance(k, str) for k in _all_keys) else "(none)"
+    _nested = root.get("nestedKeys")
+    _nested_text = ""
+    if isinstance(_nested, dict):
+        _nested_text = " nestedKeys={" + ", ".join(f"{k}:[{','.join(v)}]" for k, v in _nested.items() if isinstance(v, list)) + "}"
     diagnostics.log(
         f"auth: httpStatus={status} payload=[{diagnostics.describe_keys(payload)}] "
         f"outcome={get_str('outcome') or '(none)'} type={get_str('type') or '(none)'} "
         f"reason={get_str('reason') or '(none)'} hasToken={bool(get_str('access_token'))} "
-        f"bindingKind={binding_kind} accountField={_account_field}"
+        f"bindingKind={binding_kind} accountField={_account_field} allKeys=[{_all_keys_text}]{_nested_text}"
     )
 
     if status == 401:

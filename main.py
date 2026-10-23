@@ -18,9 +18,10 @@ def main() -> int:
         print("缺少 PySide6，请先运行：python3 -m pip install -r requirements.txt", file=sys.stderr)
         return 1
 
-    # Windows 任务栏分组：不设这个 ID，窗口会跟 python.exe
-    # 归到一组、任务栏显示 Python 图标；设专属 ID 后才按
-    # 本应用分组、显示本应用的图标。必须在建窗口之前设。
+    # Windows 任务栏分组（保留作兼容）：主窗已是 Qt.Tool 工具窗，
+    # 本来就不进任务栏、不显示任务栏图标；这里的 ID 只影响
+    # 万一有非工具窗（如登录对话框）时的分组，不会再让主窗
+    # 在任务栏出现。必须在建窗口之前设。
     if sys.platform == "win32":
         try:
             import ctypes
@@ -38,8 +39,8 @@ def main() -> int:
     # 按钮（FloatingWindow 里调 self.close()）。全仓任何地方
     # 都不要再加托盘，否则就违背这条定版要求。
 
-    # 运行时应用图标：任务栏 / Dock / Alt-Tab 显示做的那个图标，
-    # 而不是默认的 Python / PyInstaller 图标。找不到图标文件时
+    # 运行时应用图标：主窗是 Tool 窗故不进任务栏，图标主要用于
+    # 登录对话框等非工具窗和打包产物外观；找不到图标文件时
     # 按默认处理，不因此启动失败。
     app_icon = None
     try:

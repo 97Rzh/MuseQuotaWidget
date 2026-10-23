@@ -46,6 +46,9 @@ class BackgroundLogin(QObject):
             return
         try:
             window = QWidget()
+            # Tool：离屏窗也不进任务栏，否则启动自动登录时会闪一个任务栏图标。
+            from PySide6.QtCore import Qt as _Qt
+            window.setWindowFlags(_Qt.Tool)
             window.setWindowTitle("")
             window.resize(800, 600)
             window.move(-10000, -10000)

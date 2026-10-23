@@ -209,7 +209,12 @@ class FloatingWindow(QWidget):
                 self.setWindowIcon(_icon)
         except Exception:
             pass
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        # Qt.Tool：工具窗在 Windows 上不进任务栏、不进托盘、不进 Alt-Tab，
+        # 启动时就不会在底部出现那个带绿 % 的图标；退出只走设置面板里
+        # 的“退出软件”按钮（调 self.close()）。无边框 + 始终置顶不变。
+        # 注意：main.py 里那个“任务栏显示图标”的注释已过时，
+        # 加 Tool 后任务栏不再显示它，图标只剩窗口自身的装饰（无边框故不可见）。
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.resize(240, 180)
         # 宽度由设置面板开关控制，不由布局说了算：Mac 上只调 resize()
