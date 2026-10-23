@@ -7,11 +7,16 @@
 窗体从 240 宽放大到 528 宽，右侧出现 RamanVista 风格的设置面板；
 再点齿轮或面板里的“完成”可收回。
 
-边缘停靠：把悬浮窗拖到屏幕边缘附近（40px 内）再双击，
-窗体滑到屏幕外、只在边缘留一条 8px 的线；鼠标划过这条线
-时窗体滑出来，鼠标离开窗体时又滑回去；把滑出来的窗体
-拖离边缘，就取消停靠、恢复成普通悬浮窗。设置面板展开时
-不触发停靠，点齿轮展开设置会先取消停靠。
+边缘隐藏（取代旧的双击停靠 + 8px 线）：
+- 窗体永远拖不出屏幕：拖动全程按当前屏幕可视区域钳制，
+  拖到边就停在边上，不会一半滑到屏幕外。
+- 拖到边缘松手就自动隐藏：不再需要双击，松手时窗体
+  只要贴着边（5px 内），就变成贴在边上的一条 96x48 小条，
+  条里只显示剩余额度（跟主窗同色，绿 / 黄 / 红随剩余额度变）。
+- 划过小条就展开：鼠标划过小条，窗体在边上完整展开；
+  鼠标离开完整窗体，又变回小条；把展开后的窗体拖离边缘，
+  就取消隐藏、恢复成普通悬浮窗。
+设置面板展开时不触发隐藏，点齿轮展开设置会先取消隐藏。
 
 控件风格参考 RamanVista：深色表面 #2B2D33 / #25272D、
 边框 #606060、主色浅蓝 #4FC3F7、卡片圆角 12、按钮圆角 6、
@@ -205,13 +210,16 @@ class FloatingWindow(QWidget):
         self._is_settings_expanded = False
         self._suppress_slider_apply = False
         self._drag_pos = None
-        # 边缘停靠状态：_docked_edge 为 None = 未停靠，
-        # 否则为 'left'/'right'/'top'/'bottom'；_docked_hidden 为 True
-        # 表示当前正滑在屏幕外、只留一条线。
-        self._docked_edge = None
-        self._docked_hidden = False
-        self._dock_line = 8
-        self._dock_threshold = 40
+        self._drag_moved = False
+        # 边缘隐藏状态：_hidden_edge 为 None = 普通悬浮窗，
+        # 否则为 'left'/'right'/'top'/'bottom'，表示当前在边缘隐藏体系里；
+        # _is_bar 为 True = 当前正显示小条，False = 当前是完整窗体
+        # （从小条划过展开来的，鼠标离开后会变回小条）。
+        self._hidden_edge = None
+        self._is_bar = False
+        self._bar_width = 96
+        self._bar_height = 48
+        self._edge_threshold = 5
         self._background_login = None
         self._fetch_thread = None
         self._fetch_worker = None
@@ -233,6 +241,7 @@ class FloatingWindow(QWidget):
         card_layout = QHBoxLayout(card)
         card_layout.setContentsMargins(16, 14, 16, 12)
         card_layout.setSpacing(0)
+        self._card_layout = card_layout
 
         # ---- 额度区 ----
         self.quota_widget = QWidget()
@@ -289,6 +298,19 @@ class FloatingWindow(QWidget):
         quota_layout.addWidget(self.time_label)
 
         card_layout.addWidget(self.quota_widget, 1)
+
+        # ---- 边缘小条：隐藏后只显示剩余额度，平时不显示 ----
+        # 小条就是主窗体本身变小，不是另外开一个窗口：隐藏时把
+        # 额度区藏起来、只留这个标签，窗体缩到 96x48 贴在边上。
+        self.bar_label = QLabel("—")
+        self.bar_label.setAlignment(Qt.AlignCenter)
+        bar_font = QFont()
+        bar_font.setBold(True)
+        bar_font.setPointSize(16)
+        self.bar_label.setFont(bar_font)
+        self.bar_label.setStyleSheet("color: #4ADE80;")
+        self.bar_label.setVisible(False)
+        card_layout.addWidget(self.bar_label, 1)
 
         # ---- 设置面板 ----
         self.settings_widget = QWidget()
@@ -421,6 +443,7 @@ class FloatingWindow(QWidget):
             self.pace_scale,
             self.pace_label,
             self.time_label,
+            self.bar_label,
         ):
             widget.installEventFilter(self)
 
@@ -429,43 +452,52 @@ class FloatingWindow(QWidget):
     def eventFilter(self, watched, event):  # noqa: N802 - Qt 命名
         if isinstance(watched, (QPushButton, QSlider, QCheckBox)):
             return super().eventFilter(watched, event)
-        if event.type() == QEvent.MouseButtonDblClick and event.button() == Qt.LeftButton:
-            # 额度区双击 = 停靠/取消停靠；按钮上的双击不走这里，
-            # 上面已经按按钮原样放行了。
-            self._on_double_click()
-            return True
         if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._drag_moved = False
             return True
         if event.type() == QEvent.MouseMove and self._drag_pos is not None and event.buttons() & Qt.LeftButton:
-            # 一拖动就取消停靠：拖离边缘后不再自动滑回，
-            # 想再停靠就拖回边缘重新双击。
-            if self._docked_edge is not None:
-                self._docked_edge = None
-                self._docked_hidden = False
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            self._drag_moved = True
+            if self._is_bar:
+                # 小条本身在拖：只移动小条，不展开、不取消，
+                # 松手时再按离边远近决定是留在边上还是变回完整窗体。
+                nx, ny = self._clamp_position(
+                    event.globalPosition().toPoint().x() - self._drag_pos.x(),
+                    event.globalPosition().toPoint().y() - self._drag_pos.y(),
+                )
+                self.move(nx, ny)
+            else:
+                # 完整窗体在拖：拖动全程钳制在屏内，拖不出边；
+                # 一拖动就取消隐藏，拖离边缘后松手不再自动变回小条，
+                # 除非松手时又正好贴着边（松手处理里再判）。
+                if self._hidden_edge is not None:
+                    self._hidden_edge = None
+                nx, ny = self._clamp_position(
+                    event.globalPosition().toPoint().x() - self._drag_pos.x(),
+                    event.globalPosition().toPoint().y() - self._drag_pos.y(),
+                )
+                self.move(nx, ny)
             return True
         if event.type() == QEvent.MouseButtonRelease:
-            self._drag_pos = None
+            self._on_drag_released()
+            return True
         return super().eventFilter(watched, event)
 
     # ---- 齿轮与拖动 ----
 
     def enterEvent(self, event):  # noqa: N802
+        # 小条状态下划过小条就展开成完整窗体；完整窗体下只显示齿轮。
+        if self._is_bar:
+            self._reveal_from_bar()
         self.gear_button.setVisible(True)
-        # 停靠在边缘、只留一条线时，鼠标划过这条线就滑出来。
-        # 窗体本身就是那条线：滑在外面时可见部分只有 8px，
-        # 鼠标进到这 8px 里就会触发 enterEvent。
-        if self._docked_edge is not None and self._docked_hidden:
-            self._reveal_docked()
         super().enterEvent(event)
 
     def leaveEvent(self, event):  # noqa: N802
         self.gear_button.setVisible(False)
-        # 停靠状态下，鼠标离开整个窗体就滑回去、只留线。
-        # 正在拖动时不滑回，否则拖动中窗体一动就被藏起来。
-        if self._docked_edge is not None and not self._docked_hidden and self._drag_pos is None:
-            self._hide_docked()
+        # 隐藏体系里、完整窗体状态下，鼠标离开整个窗体就变回小条。
+        # 正在拖动时不变回，否则拖动中窗体一动就被藏起来。
+        if self._hidden_edge is not None and not self._is_bar and self._drag_pos is None:
+            self._hide_to_bar()
         super().leaveEvent(event)
 
     def resizeEvent(self, event):  # noqa: N802
@@ -484,27 +516,32 @@ class FloatingWindow(QWidget):
                 super().mousePressEvent(event)
                 return
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._drag_moved = False
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent):  # noqa: N802
         if self._drag_pos is not None and event.buttons() & Qt.LeftButton:
-            if self._docked_edge is not None:
-                self._docked_edge = None
-                self._docked_hidden = False
-            self.move(event.globalPosition().toPoint() - self._drag_pos)
+            self._drag_moved = True
+            if self._is_bar:
+                nx, ny = self._clamp_position(
+                    event.globalPosition().toPoint().x() - self._drag_pos.x(),
+                    event.globalPosition().toPoint().y() - self._drag_pos.y(),
+                )
+                self.move(nx, ny)
+            else:
+                if self._hidden_edge is not None:
+                    self._hidden_edge = None
+                nx, ny = self._clamp_position(
+                    event.globalPosition().toPoint().x() - self._drag_pos.x(),
+                    event.globalPosition().toPoint().y() - self._drag_pos.y(),
+                )
+                self.move(nx, ny)
         super().mouseMoveEvent(event)
 
-    def mouseDoubleClickEvent(self, event: QMouseEvent):  # noqa: N802
-        # 主窗体空白处双击也走停靠；点在按钮上时不触发。
-        child = self.childAt(event.position().toPoint())
-        if isinstance(child, (QPushButton, QSlider, QCheckBox)):
-            super().mouseDoubleClickEvent(event)
-            return
-        self._on_double_click()
-        super().mouseDoubleClickEvent(event)
-
     def mouseReleaseEvent(self, event: QMouseEvent):  # noqa: N802
-        self._drag_pos = None
+        # 双击不再触发隐藏：隐藏改成拖到边缘松手自动触发，
+        # 这里不做任何双击处理，避免跟自动隐藏混在一起。
+        self._on_drag_released()
         super().mouseReleaseEvent(event)
 
     # ---- 设置面板开关 ----
@@ -512,11 +549,14 @@ class FloatingWindow(QWidget):
     def _toggle_settings(self) -> None:
         self._is_settings_expanded = not self._is_settings_expanded
         if self._is_settings_expanded:
-            # 展开设置面板时先取消停靠：528 宽的面板不适合滑到边外，
-            # 而且展开后鼠标离开再滑回会把设置面板也藏到边外。
-            # 此时窗体已经是滑出来的状态，取消后就留在屏幕内。
-            self._docked_edge = None
-            self._docked_hidden = False
+            # 展开设置面板时先取消隐藏：528 宽的面板不适合变成小条，
+            # 而且展开后鼠标离开再变回小条会把设置面板也藏起来。
+            # 此时窗体已经是展开的状态，取消后就留在屏幕内。
+            self._hidden_edge = None
+            self._is_bar = False
+            self.bar_label.setVisible(False)
+            self.quota_widget.setVisible(True)
+            self._card_layout.setContentsMargins(16, 14, 16, 12)
             # 先恢复面板宽度再显示，否则面板还压在 0 宽上。
             self.settings_widget.setFixedWidth(300)
             self.settings_widget.setVisible(True)
@@ -540,13 +580,16 @@ class FloatingWindow(QWidget):
         # sizeHint 在无边框透明窗上可能偏小，至少保留额度区高度。
         height = max(height, self.quota_widget.sizeHint().height() + 30)
         self.resize(target_width, height)
+        # 展开后窗体也可能被推到屏外，钳制回屏内。
+        nx, ny = self._clamp_position(self.x(), self.y(), target_width, height)
+        self.move(nx, ny)
         self.gear_button.move(self.width() - 16 - 28, 14)
         diagnostics.log(
             f"settings toggled: expanded={self._is_settings_expanded} "
             f"width={self.width()} target={target_width}"
         )
 
-    # ---- 边缘停靠 ----
+    # ---- 边缘隐藏：拖不出屏 + 拖到边缘松手变小条 ----
 
     def _screen_geometry(self):
         screen = self.screen()
@@ -555,87 +598,160 @@ class FloatingWindow(QWidget):
         if screen is None:
             return None
         # availableGeometry 排除菜单栏 / Dock，占的是真正能看见的区域，
-        # 停靠到这里线才不会被系统栏盖住。
+        # 钳制到这里窗体才不会被系统栏盖住一半。
         return screen.availableGeometry()
 
-    def _on_double_click(self) -> None:
-        # 设置面板展开时不触发停靠：528 宽的面板滑到边外没有意义，
-        # 先收起面板、再拖到边缘双击才是正常流程。
-        if self._is_settings_expanded:
-            return
-        if self._docked_edge is not None:
-            # 已停靠时再双击 = 取消停靠，窗体留在屏幕内不动。
-            self._docked_edge = None
-            self._docked_hidden = False
-            self._reveal_docked()
-            return
+    def _clamp_position(self, x: int, y: int, w: int = None, h: int = None):
+        """把左上角钳制在屏内：窗体永远完整在屏内，拖不出边。"""
         geom = self._screen_geometry()
         if geom is None:
-            return
-        # 到四条边的距离，取最小的那条；离边超过阈值就不停靠，
-        # 避免在屏幕中间双击一下就把窗体藏到边上。
-        left_dist = self.x() - geom.x()
-        right_dist = (geom.x() + geom.width()) - (self.x() + self.width())
-        top_dist = self.y() - geom.y()
-        bottom_dist = (geom.y() + geom.height()) - (self.y() + self.height())
-        edge, dist = min(
-            (("left", left_dist), ("right", right_dist), ("top", top_dist), ("bottom", bottom_dist)),
-            key=lambda item: item[1],
-        )
-        if dist > self._dock_threshold:
-            return
-        self._docked_edge = edge
-        self._hide_docked()
-        diagnostics.log(f"docked to {edge} (dist={dist})")
-
-    def _docked_position(self):
-        """停靠时窗体左上角：屏幕外，只留 _dock_line 宽的线。"""
-        geom = self._screen_geometry()
-        if geom is None or self._docked_edge is None:
-            return None
-        line = self._dock_line
-        if self._docked_edge == "left":
-            return geom.x() - self.width() + line, self.y()
-        if self._docked_edge == "right":
-            return geom.x() + geom.width() - line, self.y()
-        if self._docked_edge == "top":
-            return self.x(), geom.y() - self.height() + line
-        return self.x(), geom.y() + geom.height() - line
-
-    def _revealed_position(self):
-        """滑出来时窗体左上角：贴着同一条边、完整显示在屏幕内。"""
-        geom = self._screen_geometry()
-        if geom is None or self._docked_edge is None:
-            return None
-        w, h = self.width(), self.height()
-        x, y = self.x(), self.y()
-        if self._docked_edge == "left":
-            x = geom.x()
-            y = max(geom.y(), min(y, geom.y() + geom.height() - h))
-        elif self._docked_edge == "right":
-            x = geom.x() + geom.width() - w
-            y = max(geom.y(), min(y, geom.y() + geom.height() - h))
-        elif self._docked_edge == "top":
-            y = geom.y()
-            x = max(geom.x(), min(x, geom.x() + geom.width() - w))
-        else:
-            y = geom.y() + geom.height() - h
-            x = max(geom.x(), min(x, geom.x() + geom.width() - w))
+            return x, y
+        w = self.width() if w is None else w
+        h = self.height() if h is None else h
+        x = max(geom.x(), min(x, geom.x() + geom.width() - w))
+        y = max(geom.y(), min(y, geom.y() + geom.height() - h))
         return x, y
 
-    def _hide_docked(self) -> None:
-        pos = self._docked_position()
-        if pos is None:
-            return
-        self._docked_hidden = True
-        self.move(pos[0], pos[1])
+    def _edge_at(self, x: int, y: int, w: int, h: int):
+        """窗体贴着哪条边（5px 内算贴着），否则返回 None。"""
+        geom = self._screen_geometry()
+        if geom is None:
+            return None
+        if abs(x - geom.x()) <= self._edge_threshold:
+            return "left"
+        if abs((geom.x() + geom.width()) - (x + w)) <= self._edge_threshold:
+            return "right"
+        if abs(y - geom.y()) <= self._edge_threshold:
+            return "top"
+        if abs((geom.y() + geom.height()) - (y + h)) <= self._edge_threshold:
+            return "bottom"
+        return None
 
-    def _reveal_docked(self) -> None:
-        pos = self._revealed_position()
-        if pos is None:
+    def _on_drag_released(self) -> None:
+        """松手时判一次：只在真的拖动过时才判，点一下不算拖动。
+        eventFilter 和 mouseReleaseEvent 都会调这里，第一次调完
+        就把 _drag_moved 清掉，第二次调进来直接返回，不会重复判。"""
+        moved = self._drag_moved
+        self._drag_pos = None
+        self._drag_moved = False
+        if not moved:
             return
-        self._docked_hidden = False
-        self.move(pos[0], pos[1])
+        if self._is_settings_expanded:
+            return
+        if self._is_bar:
+            # 小条在拖：松手时还在边上就留在边上（边可能换了，
+            # 比如从左边沿着上边拖到了上边），离边远了就变回完整窗体。
+            edge = self._edge_at(self.x(), self.y(), self.width(), self.height())
+            if edge is not None:
+                self._hidden_edge = edge
+                bx, by = self._bar_position(edge, self.x(), self.y())
+                self.move(bx, by)
+            else:
+                self._cancel_bar_mode(self.x(), self.y())
+            return
+        # 完整窗体在拖：松手时贴着边就变小条，否则保持完整窗体。
+        # 拖动中已经把 _hidden_edge 清掉了，所以这里只用判一次：
+        # 贴边 = 新进小条，不贴边 = 正常停在屏内。
+        edge = self._edge_at(self.x(), self.y(), self.width(), self.height())
+        if edge is not None:
+            self._enter_bar_mode(edge)
+
+    def _bar_position(self, edge: str, ref_x: int, ref_y: int):
+        """小条在边上的左上角：完全在屏内，贴着边。
+        左右边用原来的 y（沿边上下可拖），上下边用原来的 x。"""
+        geom = self._screen_geometry()
+        if geom is None:
+            return ref_x, ref_y
+        bw, bh = self._bar_width, self._bar_height
+        if edge == "left":
+            return geom.x(), max(geom.y(), min(ref_y, geom.y() + geom.height() - bh))
+        if edge == "right":
+            return geom.x() + geom.width() - bw, max(geom.y(), min(ref_y, geom.y() + geom.height() - bh))
+        if edge == "top":
+            return max(geom.x(), min(ref_x, geom.x() + geom.width() - bw)), geom.y()
+        return max(geom.x(), min(ref_x, geom.x() + geom.width() - bw)), geom.y() + geom.height() - bh
+
+    def _enter_bar_mode(self, edge: str) -> None:
+        """完整窗体 -> 小条：藏起额度区、只留剩余额度标签。"""
+        ref_x, ref_y = self.x(), self.y()
+        self._hidden_edge = edge
+        self._is_bar = True
+        self.settings_widget.setVisible(False)
+        self.settings_widget.setFixedWidth(0)
+        self.quota_widget.setVisible(False)
+        self.bar_label.setVisible(True)
+        self.gear_button.setVisible(False)
+        self._card_layout.setContentsMargins(8, 6, 8, 6)
+        self.setFixedWidth(self._bar_width)
+        self.updateGeometry()
+        QApplication.processEvents()
+        bx, by = self._bar_position(edge, ref_x, ref_y)
+        self.resize(self._bar_width, self._bar_height)
+        self.move(bx, by)
+        self._sync_bar_label()
+        diagnostics.log(f"edge hidden to bar: edge={edge}")
+
+    def _reveal_from_bar(self) -> None:
+        """小条 -> 完整窗体：仍在隐藏体系里，鼠标离开后会变回小条。"""
+        if self._hidden_edge is None:
+            return
+        edge = self._hidden_edge
+        bar_x, bar_y = self.x(), self.y()
+        self._is_bar = False
+        self.bar_label.setVisible(False)
+        self.quota_widget.setVisible(True)
+        self._card_layout.setContentsMargins(16, 14, 16, 12)
+        self.setFixedWidth(240)
+        self.updateGeometry()
+        QApplication.processEvents()
+        height = self.sizeHint().height()
+        height = max(height, self.quota_widget.sizeHint().height() + 30)
+        geom = self._screen_geometry()
+        if geom is None:
+            self.resize(240, height)
+            return
+        if edge == "left":
+            x, y = geom.x(), max(geom.y(), min(bar_y, geom.y() + geom.height() - height))
+        elif edge == "right":
+            x, y = geom.x() + geom.width() - 240, max(geom.y(), min(bar_y, geom.y() + geom.height() - height))
+        elif edge == "top":
+            x, y = max(geom.x(), min(bar_x, geom.x() + geom.width() - 240)), geom.y()
+        else:
+            x, y = max(geom.x(), min(bar_x, geom.x() + geom.width() - 240)), geom.y() + geom.height() - height
+        self.resize(240, height)
+        self.move(x, y)
+
+    def _hide_to_bar(self) -> None:
+        """完整窗体（隐藏体系里）-> 小条：鼠标离开完整窗体时调。"""
+        if self._hidden_edge is None:
+            return
+        self._enter_bar_mode(self._hidden_edge)
+
+    def _cancel_bar_mode(self, x: int, y: int) -> None:
+        """小条 -> 普通完整窗体：拖离边缘后取消隐藏，不再自动变回小条。"""
+        self._hidden_edge = None
+        self._is_bar = False
+        self.bar_label.setVisible(False)
+        self.quota_widget.setVisible(True)
+        self._card_layout.setContentsMargins(16, 14, 16, 12)
+        self.setFixedWidth(240)
+        self.updateGeometry()
+        QApplication.processEvents()
+        height = self.sizeHint().height()
+        height = max(height, self.quota_widget.sizeHint().height() + 30)
+        nx, ny = self._clamp_position(x, y, 240, height)
+        self.resize(240, height)
+        self.move(nx, ny)
+
+    def _sync_bar_label(self) -> None:
+        """小条里的剩余额度跟主窗同步，颜色也跟主窗一致。"""
+        if self._last_good is not None:
+            remaining = max(0.0, min(100.0, self._last_good.remaining))
+            self.bar_label.setText(f"{remaining:.0f}%")
+            self.bar_label.setStyleSheet(f"color: {_remaining_color(remaining)};")
+        else:
+            self.bar_label.setText("—")
+            self.bar_label.setStyleSheet("color: #4ADE80;")
 
     def _set_quota_mini(self, mini: bool) -> None:
         font = QFont()
@@ -828,10 +944,9 @@ class FloatingWindow(QWidget):
 
         self._show_pace(data, remaining)
         self._update_login_status()
-        # 停靠在外面时，额度刷新可能改变窗体高度（节奏区出现/消失），
-        # 高度变了停靠位置也要跟着重算，否则留的线会变宽或变窄。
-        if self._docked_edge is not None and self._docked_hidden:
-            self._hide_docked()
+        # 小条状态下额度刷新只改小条里的数字和颜色，窗体保持小条尺寸，
+        # 不会因为节奏区出现/消失就把小条撑回完整窗体。
+        self._sync_bar_label()
 
     def _show_pace(self, data: QuotaData, remaining: float) -> None:
         if data.weekly_reset_at is None:
