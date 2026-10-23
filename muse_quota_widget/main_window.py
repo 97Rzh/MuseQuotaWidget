@@ -306,10 +306,17 @@ class FloatingWindow(QWidget):
         pace_layout.addLayout(pace_labels)
         self.pace_label = QLabel("—")
         self.pace_label.setAlignment(Qt.AlignCenter)
+        # 节奏文案改成日期时间后变长了（“快 10% · 预计 10-26 12:51 用完”
+        # 共 25 字），12pt 在 240 宽窗体里（卡片内宽 208px）会把
+        # 最后一个“完”字裁出界；改成 10pt，宽度约等于原来
+        # “提前 X 天”文案在 12pt 的宽度，刚好能放进一行。
+        # 再加 wordWrap 兜底：Windows 字体稍宽时即使 10pt 仍超长，
+        # 宁可换成两行，也不要把字裁掉。
         pace_font = QFont()
         pace_font.setBold(True)
-        pace_font.setPointSize(12)
+        pace_font.setPointSize(10)
         self.pace_label.setFont(pace_font)
+        self.pace_label.setWordWrap(True)
         pace_layout.addWidget(self.pace_label)
         self.pace_widget.setVisible(False)
         quota_layout.addWidget(self.pace_widget)
@@ -972,7 +979,7 @@ class FloatingWindow(QWidget):
         self.time_label.setStyleSheet(f"color: #9CA3AF; font-size: {10 if mini else 11}px;")
         pace_font = QFont()
         pace_font.setBold(True)
-        pace_font.setPointSize(10 if mini else 12)
+        pace_font.setPointSize(10)
         self.pace_label.setFont(pace_font)
         self.pace_label.setAlignment(Qt.AlignLeft if mini else Qt.AlignCenter)
 
@@ -1174,3 +1181,10 @@ class FloatingWindow(QWidget):
         self.pace_label.setText(pace.text)
         self.pace_label.setStyleSheet(f"color: {pace.color};")
         self.pace_widget.setVisible(True)
+        # 换行兜底要配合高度自适应：万一 Windows 字体更宽、
+        # 节奏文案换成两行，窗体高度要跟着长一截，否则第二行
+        # 还是会被裁；小条、设置展开、形变中不调，免得把小条
+        # 撑回完整窗体或把设置面板高度打乱。
+        if not self._is_bar and not self._is_settings_expanded and not self._suction_animating:
+            self.updateGeometry()
+            self.adjustSize()
