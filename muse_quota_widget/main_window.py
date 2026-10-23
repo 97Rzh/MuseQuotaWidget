@@ -690,21 +690,22 @@ class FloatingWindow(QWidget):
         return height
 
     def _toggle_settings(self) -> None:
-        """点齿轮展开/收起设置：抽屉式高度形变，不再中途换内容。
+        """点齿轮展开/收起设置：高度先行、内容后换，不压扁内容。
 
-        以前是边缘隐藏那套：600ms、easeInOut、透明度先跌到 0.2
-        再亮回 1.0、中途换内容。设置内容多（标题、按钮、滑块），
-        中途换内容 + 透明度跌到底 + 高度还在半路，三者一叠加，
-        窗体先几乎消失、再突然换成另一套内容、高度还在追，
-        看起来就是卡顿（视频里那一下）。现在改成抽屉式：
-        600ms、30 步、easeInOut、透明度全程 1.0 不变；
-        展开时形变开始前就先换成设置内容，再从中等高度长到大窗高度，
-        设置是随着高度长出来、不是中途突然换出来的；
-        收起时形变全程保持设置内容、从大窗高度缩到中等高度，
-        设置是随着高度缩回去、到结束时才换成中等窗内容；
-        收起到小条时同理，结束时才换成小条内容。
-        宽度始终 240，只有高度在变。形变进行中再点齿轮直接返回，
-        避免两个形变打架。
+        上一版抽屉式是错的：展开时先换成设置内容、再长高，
+        收起时全程保持设置内容、再缩矮——Qt 布局不会把内容裁掉，
+        只会把内容压扁，设置在高度不够的 600ms 里全程挤在一起、
+        按钮变扁、文字重叠，视频里就是这样。正确做法是内容
+        永远只出现在高度够的窗里：展开时形变全程保持中等窗内容
+        （高度从中等长到大窗，中等内容始终够高、不压扁，
+        下面只是多出空白卡片），到结束时高度已够才换成设置内容，
+        设置一出现就是完整形态；收起时形变开始前就先换成
+        中等窗内容（高度从大窗缩到中等，中等内容始终够高、
+        不压扁，下面空白逐渐缩没），结束时不再换内容。
+        透明度全程 1.0 不变，形变中途不换内容。
+        收起到小条是例外：高度要缩到 48，任何内容都不够高，
+        仍走旧的透明度跌亮 + 中途换小条内容，靠暗处盖住压扁。
+        宽度始终 240，只有高度在变。形变进行中再点齿轮直接返回。
         """
         if self._settings_morphing or self._suction_animating or self._reveal_morphing:
             return
@@ -749,14 +750,15 @@ class FloatingWindow(QWidget):
         self._settings_morph_start = (start_x, start_y, start_w, start_h)
         self._settings_morph_target = (target_x, target_y, target_w, target_h)
         self._settings_morph_step = 0
-        # 抽屉式换内容时机：展开时开始前就换成设置内容，
-        # 形变只是把它从旧高度长出来；收起时开始前不换，
-        # 全程保持设置内容、缩到目标高度后结束时才换。
-        # 所以 expanding 时这里就把 switched 置 True（已换），
-        # 收起时 switched 保持 False、结束时才换。
-        self._settings_morph_switched = expanding and not to_bar
+        # 换内容时机（关键，压扁的根因就在这里）：
+        # 展开时开始前不换，形变全程保持中等窗内容，结束时才换设置；
+        # 收起时开始前就换成中等窗内容，形变全程保持中等窗内容；
+        # 收起到小条时开始前不换，形变中途（旧逻辑）才换小条。
+        # 所以收起回中等窗时 switched 置 True（已换），
+        # 展开和收起到小条时 switched 保持 False、结束/中途才换。
+        self._settings_morph_switched = (not expanding) and not to_bar
         if self._settings_morph_switched:
-            self._apply_settings_content(True)
+            self._apply_settings_content(False)
         # 形变期间固定尺寸，布局的 sizeHint 才不会把窗体抢回内容高度；
         # 结束时再放开高度、只固定宽度 240。
         self.setFixedSize(start_w, start_h)
@@ -772,9 +774,10 @@ class FloatingWindow(QWidget):
         self._settings_morph_step += 1
         total = self._settings_morph_total
         t = min(1.0, self._settings_morph_step / total)
-        # 抽屉式：easeInOut 只变高度/位置，透明度全程 1.0 不变，
-        # 形变中途不换内容。展开的内容在开始前已换好，收起的内容
-        # 在结束时才换，所以形变中途没有内容跳变和透明度闪烁。
+        # 非小条路径：easeInOut 只变高度/位置，透明度全程 1.0，
+        # 形变中途不换内容（展开结束时换设置，收起开始前已换中等窗）。
+        # 小条路径例外：高度要缩到 48，任何内容都不够高，
+        # 仍用旧的透明度跌亮 + 中途换小条内容，靠暗处盖住压扁。
         eased = 4 * t * t * t if t < 0.5 else 1 - ((-2 * t + 2) ** 3) / 2
         sx, sy, sw, sh = self._settings_morph_start
         bx, by, bw, bh = self._settings_morph_target
@@ -782,8 +785,20 @@ class FloatingWindow(QWidget):
         y = int(sy + (by - sy) * eased)
         w = int(sw + (bw - sw) * eased)
         h = int(sh + (bh - sh) * eased)
+        if self._settings_morph_to_bar:
+            self.setWindowOpacity(1.0 - 0.8 * math.sin(math.pi * t))
         self.setFixedSize(max(20, w), max(20, h))
         self.move(x, y)
+        if t >= 0.5 and not self._settings_morph_switched and self._settings_morph_to_bar:
+            self._settings_morph_switched = True
+            self._is_settings_expanded = False
+            self._divider_widget.setVisible(False)
+            self.settings_widget.setVisible(False)
+            self._set_quota_mini(False)
+            self.quota_widget.setVisible(False)
+            self.bar_label.setVisible(True)
+            self._card_layout.setContentsMargins(8, 6, 8, 6)
+            self._sync_bar_label()
         if t >= 1.0:
             expanding = self._settings_morph_expanding
             to_bar = self._settings_morph_to_bar
