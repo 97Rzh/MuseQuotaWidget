@@ -19,10 +19,12 @@
 设置面板展开时不触发隐藏，点齿轮展开设置会先取消隐藏。
 
 边缘吸附动画：拖动完整窗体靠近某条边（90px 内）时，
-那条边上出现一个跟窗体对齐的发光吸入带：边上亮线 +
-向边里吸入的条纹和粒子，越靠近越亮、条纹吸入越快，
-窗体本身也被轻轻吸向那条边；松手贴边后吸入带闪一下、
-200ms 后窗体才变成小条，像被边吸进去一样。
+那条边上出现一条覆盖窗体到边间隙的吸入带：16 根细长
+弯曲光丝从窗体边连到屏幕边，每根弯曲、速度、光点都不同，
+光点沿丝向边里跑、越近越亮越快，窗体本身也被轻轻吸向边；
+松手贴边后不再瞬间切小条，而是 440ms 形变过渡：窗体
+滑向边、缩小、透明度先暗后亮，中途在最暗处换成小条内容，
+最后定在小条上，像被边吸着变形进去一样。
 吸入带是独立的 Tool 悬浮层，不抢鼠标、不抢焦点，
 只在拖动时出现，松手、拖离、展开设置时都消失。
 
@@ -179,12 +181,17 @@ def _remaining_color(remaining: float) -> str:
 
 
 class SuctionOverlay(QWidget):
-    """边缘吸附动画层：贴在某条边上的发光吸入带。
+    """边缘吸附动画层：一丝丝光影被牵引进边的带子。
 
-    只画两样东西，不做任何交互：边上一条亮线 + 向边里
-    吸入的条纹 / 粒子。_progress 越近 1 越亮、吸入越快，
-    _phase 由 33ms 定时器推进，条纹就一格格向边里走。
-    左右边画横向条纹、上下边画纵向条纹，方向都是向边里。
+    不做任何交互，只画光丝：每条光丝都是一根细长弯曲的
+    光线，一端连在窗体边上、一端连在屏幕边上，中间带一点
+    正弦弯曲，像被边牵着走；光丝上还有一个亮点沿着丝向边
+    里跑，越近边越亮。上一版是均匀的短直线条纹，看起来
+    像整块在闪，这一版改成每根丝长短、弯曲、速度都不同，
+    才像一丝一丝的光被牵引。
+    带子本身覆盖窗体到边的间隙（不是只贴边 56px），
+    窗体越近间隙越短、光丝越短，吸入感就是丝在收缩。
+    _progress 越近 1 越亮、光点跑得越快。
     """
 
     def __init__(self, parent=None):
@@ -203,8 +210,9 @@ class SuctionOverlay(QWidget):
         self._timer.timeout.connect(self._on_tick)
 
     def _on_tick(self) -> None:
-        # 越近吸得越快：基础速度 + 靠近加成，phase 到 1 回 0 循环。
-        self._phase = (self._phase + 0.10 + self._progress * 0.18) % 1.0
+        # 光点沿丝跑的速度：慢一点才像光被牵引，不是闪烁；
+        # 越近跑得越快，phase 到 1 回 0 循环。
+        self._phase = (self._phase + 0.035 + self._progress * 0.07) % 1.0
         self.update()
 
     def show_suction(self, edge: str, x: int, y: int, w: int, h: int, progress: float) -> None:
@@ -230,13 +238,12 @@ class SuctionOverlay(QWidget):
         w, h = self.width(), self.height()
         if w <= 0 or h <= 0:
             return
-        # 脉动：亮度随 phase 轻微起伏，越近基底越亮。
         pulse = 0.85 + 0.15 * math.sin(self._phase * 2 * math.pi)
-        base_alpha = int((90 + self._progress * 130) * pulse)
+        base_alpha = int((70 + self._progress * 110) * pulse)
         core_alpha = int((170 + self._progress * 85) * pulse)
         edge = self._edge
         horizontal = edge in ("left", "right")
-        # 渐变：边上最亮、向屏内淡出，像被边吸住的光晕。
+        # 光晕：边上最亮、向窗体方向淡出，只做底色，不抢光丝的戏。
         if edge == "left":
             grad = QLinearGradient(0, 0, w, 0)
         elif edge == "right":
@@ -246,10 +253,10 @@ class SuctionOverlay(QWidget):
         else:
             grad = QLinearGradient(0, h, 0, 0)
         grad.setColorAt(0.0, QColor(79, 195, 247, base_alpha))
-        grad.setColorAt(0.55, QColor(79, 195, 247, int(base_alpha * 0.35)))
+        grad.setColorAt(0.6, QColor(79, 195, 247, int(base_alpha * 0.30)))
         grad.setColorAt(1.0, QColor(79, 195, 247, 0))
         painter.fillRect(0, 0, w, h, grad)
-        # 边上的亮线：3px，电影里那种吸入口的亮边。
+        # 边上的亮线：3px，吸入口的亮边。
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor(180, 230, 255, core_alpha))
         if edge == "left":
@@ -260,38 +267,75 @@ class SuctionOverlay(QWidget):
             painter.drawRect(0, 0, w, 3)
         else:
             painter.drawRect(0, h - 3, w, 3)
-        # 吸入条纹：10 条，位置随 phase 向边里走，越近边越亮越长。
-        count = 10
+        # 一丝丝光丝：16 根，每根从窗体边连到屏幕边，带正弦弯曲。
+        # 画法是分段折线：每段透明度向边里递增，靠近边最亮，
+        # 像光被边牵过去；每根丝的弯曲幅度、相位、光点位置都不同，
+        # 不会整齐划一地闪。光点沿着丝向边里跑，跑过的地方留
+        # 一小段亮尾，牵引感就来自这个光点，而不是整条丝在平移。
+        count = 16
         span = h if horizontal else w
         depth = w if horizontal else h
+        # depth 是带子沿吸入方向的长度：窗体到边的间隙 + 20 重叠。
+        # 间隙为 0 时 depth 只剩 20，光丝就缩成边上的一小段亮光，
+        # 正好是吸入完成前一刻的样子。
         for i in range(count):
-            t = (self._phase + i / count) % 1.0
-            # t=0 在屏内最远处，t=1 刚到边：条纹就是向边里吸的轨迹。
-            along = ((i * 37) % count) / count * span + span / (2 * count)
-            inward = depth * (1.0 - t) if edge in ("left", "top") else depth * t
-            length = 14 + self._progress * 22
-            alpha = int(50 + t * 190)
-            pen = QPen(QColor(190, 235, 255, alpha))
-            pen.setWidth(2)
-            painter.setPen(pen)
-            # 条纹的头在 inward 处（向边里走的那一端），尾拖在后面：
-            # 向左吸时尾在右、向右吸时尾在左、向上吸时尾在下、向下吸时尾在上。
-            # 之前写反了会像条纹在向外跑，这里按运动方向画才像被吸进去。
+            # 沿边的位置：均匀铺开 + 每根固定抖动，不随时间跳。
+            along_base = (i + 0.5) / count * span + ((i * 29) % 7 - 3)
+            wave_amp = 3.0 + (i % 4)  # 3-6px 弯曲幅度，每根不同
+            wave_phase = i * 0.9
+            # 光点在丝上的位置：0 在窗体边、1 在屏幕边，随 phase 向边跑。
+            dot_t = (self._phase * (0.7 + (i % 3) * 0.15) + i * 0.11) % 1.0
+            segments = 10
+            prev_x = prev_y = None
+            for s in range(segments + 1):
+                t = s / segments  # 0 窗体边，1 屏幕边
+                # 吸入方向上的坐标：左 / 上是 depth->0，右 / 下是 0->depth。
+                # 带子坐标系里，窗体边在 depth 附近（左 / 上）或 0 附近（右 / 下），
+                # 这里统一用 t 从窗体边走到屏幕边，再映射到带子坐标。
+                if edge == "left":
+                    px = depth - t * depth
+                elif edge == "right":
+                    px = t * depth
+                elif edge == "top":
+                    py = depth - t * depth
+                    px = None
+                else:
+                    py = t * depth
+                    px = None
+                bend = math.sin(t * math.pi * 2 + wave_phase + self._phase * 2 * math.pi) * wave_amp
+                if horizontal:
+                    x = px
+                    y = along_base + bend
+                else:
+                    x = along_base + bend
+                    y = py
+                if prev_x is not None:
+                    # 越近边越亮：t 越大 alpha 越大，丝尾在窗体边是淡的。
+                    alpha = int(30 + t * (120 + self._progress * 90))
+                    pen = QPen(QColor(190, 235, 255, alpha))
+                    pen.setWidth(1)
+                    painter.setPen(pen)
+                    painter.drawLine(int(prev_x), int(prev_y), int(x), int(y))
+                prev_x, prev_y = x, y
+            # 光点：沿丝跑的亮点，位置用 dot_t 算，弯曲跟丝同一条。
             if edge == "left":
-                painter.drawLine(int(inward), int(along), int(inward + length), int(along))
+                dot_x = depth - dot_t * depth
             elif edge == "right":
-                painter.drawLine(int(inward - length), int(along), int(inward), int(along))
+                dot_x = dot_t * depth
             elif edge == "top":
-                painter.drawLine(int(along), int(inward), int(along), int(inward + length))
+                dot_y = depth - dot_t * depth
+                dot_x = None
             else:
-                painter.drawLine(int(along), int(inward - length), int(along), int(inward))
-            # 粒子：跟在条纹后面、更小的亮点，吸入感更明显。
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(220, 245, 255, alpha))
+                dot_y = dot_t * depth
+                dot_x = None
+            dot_bend = math.sin(dot_t * math.pi * 2 + wave_phase + self._phase * 2 * math.pi) * wave_amp
             if horizontal:
-                painter.drawEllipse(int(inward - 2), int(along - 2), 4, 4)
+                dot_px, dot_py = dot_x, along_base + dot_bend
             else:
-                painter.drawEllipse(int(along - 2), int(inward - 2), 4, 4)
+                dot_px, dot_py = along_base + dot_bend, dot_y
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(230, 248, 255, 230))
+            painter.drawEllipse(int(dot_px - 2), int(dot_py - 2), 4, 4)
 
 
 class _FetchWorker(QObject):
@@ -350,6 +394,15 @@ class FloatingWindow(QWidget):
         self._suction_overlay = None
         self._suction_animating = False
         self._suction_timer = None
+        # 吸入形变：松手后 440ms 内从完整窗体滑向边、缩小成小条，
+        # 中途换内容，结束时才真正定在小条上，不再瞬间切换。
+        self._morph_timer = None
+        self._morph_step = 0
+        self._morph_total = 22
+        self._morph_start = None
+        self._morph_target = None
+        self._morph_edge = None
+        self._morph_switched = False
         self._background_login = None
         self._fetch_thread = None
         self._fetch_worker = None
@@ -803,27 +856,36 @@ class FloatingWindow(QWidget):
         return nx, ny
 
     def _show_suction(self, edge: str, progress: float, win_x: int, win_y: int) -> None:
-        """在对应边上显示吸入带，带子跟窗体沿边对齐、只在拖动时出现。"""
+        """在对应边上显示吸入带，带子跟窗体沿边对齐、只在拖动时出现。
+
+        带子覆盖窗体到边的间隙 + 20px 重叠在窗体边上，光丝
+        才能从窗体边一直连到屏幕边，而不是只在边上 56px 里闪。
+        窗体越近间隙越短、光丝越短，吸入感就是丝在收缩。
+        """
         try:
             if self._suction_overlay is None:
                 self._suction_overlay = SuctionOverlay(self)
             geom = self._screen_geometry()
             if geom is None:
                 return
-            band = 56
+            overlap = 20
             w, h = self.width(), self.height()
             if edge == "left":
+                gap = max(0, win_x - geom.x())
                 ox, oy = geom.x(), max(geom.y(), min(win_y, geom.y() + geom.height() - h))
-                ow, oh = band, h
+                ow, oh = gap + overlap, h
             elif edge == "right":
-                ox, oy = geom.x() + geom.width() - band, max(geom.y(), min(win_y, geom.y() + geom.height() - h))
-                ow, oh = band, h
+                gap = max(0, (geom.x() + geom.width()) - (win_x + w))
+                ox, oy = win_x + w - overlap, max(geom.y(), min(win_y, geom.y() + geom.height() - h))
+                ow, oh = gap + overlap, h
             elif edge == "top":
+                gap = max(0, win_y - geom.y())
                 ox, oy = max(geom.x(), min(win_x, geom.x() + geom.width() - w)), geom.y()
-                ow, oh = w, band
+                ow, oh = w, gap + overlap
             else:
-                ox, oy = max(geom.x(), min(win_x, geom.x() + geom.width() - w)), geom.y() + geom.height() - band
-                ow, oh = w, band
+                gap = max(0, (geom.y() + geom.height()) - (win_y + h))
+                ox, oy = max(geom.x(), min(win_x, geom.x() + geom.width() - w)), win_y + h - overlap
+                ow, oh = w, gap + overlap
             self._suction_overlay.show_suction(edge, ox, oy, ow, oh, progress)
         except Exception:
             # 吸入带只是装饰，画不出来也不能影响拖动本身。
@@ -871,23 +933,101 @@ class FloatingWindow(QWidget):
             self._hide_suction()
 
     def _start_suck_in(self, edge: str) -> None:
-        """松手吸入：吸入带调到最亮闪 200ms，再变小条。
+        """松手吸入形变：440ms 内从完整窗体滑向边、缩小成小条。
 
-        用带 parent 的单次定时器，窗体关掉时定时器跟着没，
-        不会在已关的窗体上再调 _enter_bar_mode。"""
+        不是先闪 200ms 再瞬间切小条：每 20ms 走一步，
+        位置和尺寸按 easeInOut 从完整窗体插值到小条位置尺寸，
+        透明度在中途先暗到 0.3 再亮回 1.0，内容就在最暗
+        的中途换成小条（藏额度区、显剩余额度标签），
+        所以换内容的那一下被暗处盖住，看起来就是窗体
+        被边吸着变形、最后定成小条，而不是跳变。
+        形变中吸入带保持最亮、跟着窗体缩短光丝。
+        定时器带 parent，窗体关掉时跟着没，不会在已关
+        的窗体上再跑形变。"""
+        if self._suction_animating:
+            return
         self._suction_animating = True
-        self._show_suction(edge, 1.0, self.x(), self.y())
+        self.gear_button.setVisible(False)
+        start_x, start_y = self.x(), self.y()
+        start_w, start_h = self.width(), self.height()
+        bar_x, bar_y = self._bar_position(edge, start_x, start_y)
+        self._morph_start = (start_x, start_y, start_w, start_h)
+        self._morph_target = (bar_x, bar_y, self._bar_width, self._bar_height)
+        self._morph_edge = edge
+        self._morph_step = 0
+        self._morph_switched = False
+        # 先放开固定宽度，形变才能改宽度；结束时再压回小条宽度。
+        self.setMinimumWidth(0)
+        self.setMaximumWidth(16777215)
+        self._show_suction(edge, 1.0, start_x, start_y)
         timer = QTimer(self)
-        timer.setSingleShot(True)
+        timer.setInterval(20)
+        timer.timeout.connect(self._on_morph_tick)
+        self._morph_timer = timer
+        timer.start()
 
-        def _finish():
+    def _on_morph_tick(self) -> None:
+        if self._morph_start is None or self._morph_target is None:
+            return
+        self._morph_step += 1
+        total = self._morph_total
+        t = min(1.0, self._morph_step / total)
+        # easeInOutCubic：开头慢、中间快、结尾慢，像被吸进去再定住。
+        eased = 4 * t * t * t if t < 0.5 else 1 - ((-2 * t + 2) ** 3) / 2
+        sx, sy, sw, sh = self._morph_start
+        bx, by, bw, bh = self._morph_target
+        x = int(sx + (bx - sx) * eased)
+        y = int(sy + (by - sy) * eased)
+        w = int(sw + (bw - sw) * eased)
+        h = int(sh + (bh - sh) * eased)
+        # 透明度先暗后亮：中途最暗 0.3，换内容就藏在暗处。
+        opacity = 1.0 - 0.7 * math.sin(math.pi * t)
+        self.setWindowOpacity(opacity)
+        self.setGeometry(x, y, max(20, w), max(20, h))
+        # 中途换内容：不再显示额度区，改显小条标签和边距。
+        # 换完不调 updateGeometry，否则布局会把窗体尺寸抢回小条，
+        # 形变每步都会再把尺寸压回插值尺寸，抢回去也无所谓，
+        # 但中途不调能让形变更稳。
+        if t >= 0.5 and not self._morph_switched:
+            self._morph_switched = True
+            self.settings_widget.setVisible(False)
+            self.settings_widget.setFixedWidth(0)
+            self.quota_widget.setVisible(False)
+            self.bar_label.setVisible(True)
+            self._card_layout.setContentsMargins(8, 6, 8, 6)
+            self._sync_bar_label()
+        # 吸入带跟着窗体缩短：间隙越小光丝越短，直到形变结束。
+        if self._morph_edge is not None:
+            self._show_suction(self._morph_edge, 1.0, x, y)
+        if t >= 1.0:
+            edge = self._morph_edge
+            if self._morph_timer is not None:
+                self._morph_timer.stop()
+            self._morph_timer = None
+            self._morph_start = None
+            self._morph_target = None
+            self._morph_edge = None
             self._suction_animating = False
+            self.setWindowOpacity(1.0)
             self._hide_suction()
-            self._enter_bar_mode(edge)
-
-        timer.timeout.connect(_finish)
-        self._suction_timer = timer
-        timer.start(200)
+            # 真正定在小条上：内容、边距、标签都已在中途换好，
+            # 万一中途没换（比如定时器被打断），这里补一次，不会再跳。
+            if not self._morph_switched:
+                self.settings_widget.setVisible(False)
+                self.settings_widget.setFixedWidth(0)
+                self.quota_widget.setVisible(False)
+                self.bar_label.setVisible(True)
+                self._card_layout.setContentsMargins(8, 6, 8, 6)
+                self._sync_bar_label()
+            self._hidden_edge = edge
+            self._is_bar = True
+            self.gear_button.setVisible(False)
+            self.setFixedWidth(self._bar_width)
+            bx2, by2 = self._bar_position(edge, x, y)
+            self.resize(self._bar_width, self._bar_height)
+            self.move(bx2, by2)
+            self._sync_bar_label()
+            diagnostics.log(f"edge hidden to bar: edge={edge} (morphed)")
 
     def _bar_position(self, edge: str, ref_x: int, ref_y: int):
         """小条在边上的左上角：完全在屏内，贴着边。
