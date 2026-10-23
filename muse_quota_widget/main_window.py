@@ -25,7 +25,7 @@
 （90px 内）时，那条边上出现一个奇点：14px 暗核 + 紫色吸积亮环，
 16 根光丝从窗体边螺旋着卷进亮环，颜色浅蓝转紫、弯曲向环里收紧、
 光点沿丝加速坠入，窗体本身也被轻轻吸向边；松手贴边后不再瞬间
-切小条，而是 440ms 坠入形变：窗体按 cubic in 加速滑向边、缩小、
+切小条，而是 440ms 形变过渡：窗体按 easeInOut 滑向边、缩小、
 透明度先暗后亮，中途在最暗处换成小条内容，最后定在小条上。
 吸入带是独立的 Tool 悬浮层，不抢鼠标、不抢焦点，
 只在拖动时出现，松手、拖离、展开设置时都消失。
@@ -220,13 +220,16 @@ class SuctionOverlay(QWidget):
     def show_suction(self, edge: str, x: int, y: int, w: int, h: int, progress: float) -> None:
         self._edge = edge
         self._progress = max(0.0, min(1.0, progress))
+        was_visible = self.isVisible()
         self.move(x, y)
         self.resize(w, h)
         if not self._timer.isActive():
             self._timer.start()
-        if not self.isVisible():
+        if not was_visible:
             self.show()
-        self.raise_()
+            self.raise_()
+        # 已显示时不再 raise：拖动每步都 raise 会在 Windows 上
+        # 反复改层级、看起来就是闪，move/resize 本身已够刷新。
 
     def hide_suction(self) -> None:
         if self._timer.isActive():
@@ -247,13 +250,16 @@ class SuctionOverlay(QWidget):
         horizontal = edge in ("left", "right")
         span = h if horizontal else w
         depth = w if horizontal else h
-        dark_w = 14
+        # 暗核从 14px / alpha 240 改成 8px / 200：之前间隙为 0 时
+        # 带子只剩 20px 宽，暗核占了 70%，看起来就是一条黑杠，
+        # 不是涡旋；8px 时暗核是边上的一条暗线，亮环才是主角。
+        dark_w = 8
         # depth 是带子沿吸入方向的长度：窗体到边的间隙 + 20 重叠。
         # 间隙为 0 时 depth 只剩 20，光丝就缩成暗核边上的一小段，
         # 正好是吸入完成前一刻的样子。
-        # ---- 暗核：贴边 14px 的近黑区，奇点的事件视界 ----
+        # ---- 暗核：贴边 8px 的暗区，奇点的事件视界 ----
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(3, 7, 18, 240))
+        painter.setBrush(QColor(3, 7, 18, 200))
         if edge == "left":
             painter.drawRect(0, 0, dark_w, h)
         elif edge == "right":
@@ -276,7 +282,7 @@ class SuctionOverlay(QWidget):
         grad.setColorAt(1.0, QColor(79, 195, 247, 0))
         painter.fillRect(0, 0, w, h, grad)
         # 暗核会把光晕的边侧盖掉，重新把暗核画一遍压在光晕上。
-        painter.setBrush(QColor(3, 7, 18, 240))
+        painter.setBrush(QColor(3, 7, 18, 200))
         if edge == "left":
             painter.drawRect(0, 0, dark_w, h)
         elif edge == "right":
@@ -295,10 +301,12 @@ class SuctionOverlay(QWidget):
             painter.drawRect(0, dark_w, w, 2)
         else:
             painter.drawRect(0, h - dark_w - 2, w, 2)
-        # ---- 亮环上的热点：沿边移动的亮点，像吸积盘在转 ----
+        # ---- 亮环上的热点：3 个、慢速沿边移动，像吸积盘在转 ----
+        # 之前 6 个热点一圈约 0.37 秒、沿 200px 边跑约 540px/s，
+        # 看起来就是一排点在闪；改成 3 个、速度减半，热点才像在转。
         painter.setBrush(QColor(255, 255, 255, 220))
-        for i in range(6):
-            hot_along = (self._phase * span + i * span / 6) % span
+        for i in range(3):
+            hot_along = (self._phase * 0.5 * span + i * span / 3) % span
             if edge == "left":
                 hx, hy = dark_w + 1, hot_along
             elif edge == "right":
@@ -320,11 +328,17 @@ class SuctionOverlay(QWidget):
         # 窗体边慢、近环快，像被引力加速坠入。
         count = 16
         travel = max(1, depth - dark_w)
+        # 弯曲幅度要随丝长缩放：之前丝长只剩 6px 时弯曲还有 4-7px，
+        # 丝比弯曲还短，必然扭成竖线；丝长 <70px 时按比例缩弯曲。
+        amp_scale = min(1.0, travel / 70.0)
         for i in range(count):
             along_base = (i + 0.5) / count * span + ((i * 29) % 7 - 3)
-            wave_amp = 4.0 + (i % 4)  # 4-7px，每根不同
+            wave_amp = (3.0 + (i % 3)) * amp_scale  # 3-5px 再按丝长缩
             wave_phase = i * 0.9
-            turns = 1.0 + (i % 3) * 0.5  # 1 / 1.5 / 2 圈，每根不同
+            # 圈数从 1 / 1.5 / 2 降到 0.5 / 0.75 / 1：之前 2 圈在
+            # 110px 的丝上就是来回扭两下，看起来乱；半圈到一圈
+            # 才是向环里卷一下，剩下的卷曲感靠亮环和光点给。
+            turns = 0.5 + (i % 3) * 0.25
             segments = 12
             prev_x = prev_y = None
             for s in range(segments + 1):
@@ -345,17 +359,23 @@ class SuctionOverlay(QWidget):
                     x, y = along_base + bend, coord
                 if prev_x is not None:
                     alpha = int(30 + t * (130 + self._progress * 90))
-                    r = int(79 + (167 - 79) * t)
-                    g = int(195 + (139 - 195) * t)
-                    b = int(247 + (250 - 247) * t)
+                    # 颜色只在近环 40% 才转紫，前 60% 保持浅蓝：
+                    # 之前整条丝线性转紫，远看整条都是紫的，跟蓝主题撞。
+                    purple_t = max(0.0, (t - 0.6) / 0.4)
+                    r = int(79 + (167 - 79) * purple_t)
+                    g = int(195 + (139 - 195) * purple_t)
+                    b = int(247 + (250 - 247) * purple_t)
                     pen = QPen(QColor(r, g, b, alpha))
                     pen.setWidth(1)
                     painter.setPen(pen)
                     painter.drawLine(int(prev_x), int(prev_y), int(x), int(y))
                 prev_x, prev_y = x, y
-            # 光点：沿丝加速坠入，dot_phase 线性走，dot_t 平方加速。
+            # 光点：轻加速，不是平方加速：平方在起点导数为 0、
+            # 终点导数为 2，光点先几乎不动、最后突然跳到环里再
+            # 瞬移到窗体边，看起来就是闪；轻加速起点 0.5、终点 1.5，
+            # 坠入感还在，但不会突然跳。
             dot_phase = (self._phase * (0.7 + (i % 3) * 0.15) + i * 0.11) % 1.0
-            dot_t = dot_phase * dot_phase
+            dot_t = dot_phase * (0.5 + 0.5 * dot_phase)
             if edge == "left":
                 dot_coord = depth - dot_t * travel
             elif edge == "right":
@@ -366,6 +386,7 @@ class SuctionOverlay(QWidget):
                 dot_coord = dot_t * travel
             dot_amp = wave_amp * (1 - dot_t * 0.7)
             dot_bend = math.sin(dot_t * math.pi * 2 * turns + wave_phase + self._phase * 2 * math.pi) * dot_amp
+            # wave_amp 已按丝长缩放过，dot_amp 直接复用它，不再另外放大。
             if horizontal:
                 dot_px, dot_py = dot_coord, along_base + dot_bend
             else:
@@ -1067,7 +1088,7 @@ class FloatingWindow(QWidget):
         """松手吸入形变：440ms 内从完整窗体滑向边、缩小成小条。
 
         不是先闪 200ms 再瞬间切小条：每 20ms 走一步，
-        位置和尺寸按 cubic in 从完整窗体插值到小条位置尺寸，
+        位置和尺寸按 easeInOut 从完整窗体插值到小条位置尺寸，
         透明度在中途先暗到 0.3 再亮回 1.0，内容就在最暗
         的中途换成小条（藏额度区、显剩余额度标签），
         所以换内容的那一下被暗处盖住，看起来就是窗体
@@ -1103,9 +1124,11 @@ class FloatingWindow(QWidget):
         self._morph_step += 1
         total = self._morph_total
         t = min(1.0, self._morph_step / total)
-        # cubic in：开头慢、越近环越快，像被奇点引力加速坠入，
-        # 结尾不等它慢下来就定在小条上，正好是被捕获的感觉。
-        eased = t * t * t
+        # easeInOut：中途已缩一半才换小条内容，换内容才自然。
+        # 之前改成 cubic in 后，中途 t=0.5 时 eased 只有 0.125，
+        # 窗体还剩 87.5% 大就换了小条内容，小条标签悬在大窗里，
+        # 后半段又从 87.5% 猛缩到小条，看起来就是突然塌掉。
+        eased = 4 * t * t * t if t < 0.5 else 1 - ((-2 * t + 2) ** 3) / 2
         sx, sy, sw, sh = self._morph_start
         bx, by, bw, bh = self._morph_target
         x = int(sx + (bx - sx) * eased)
