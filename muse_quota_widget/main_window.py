@@ -21,13 +21,12 @@
   就取消隐藏、恢复成普通悬浮窗。
 设置面板展开时不触发隐藏，点齿轮展开设置会先取消隐藏。
 
-边缘吸附动画：拖动完整窗体靠近某条边（90px 内）时，
-那条边上出现一条覆盖窗体到边间隙的吸入带：16 根细长
-弯曲光丝从窗体边连到屏幕边，每根弯曲、速度、光点都不同，
-光点沿丝向边里跑、越近越亮越快，窗体本身也被轻轻吸向边；
-松手贴边后不再瞬间切小条，而是 440ms 形变过渡：窗体
-滑向边、缩小、透明度先暗后亮，中途在最暗处换成小条内容，
-最后定在小条上，像被边吸着变形进去一样。
+边缘吸附动画（按奥瑞利安·索尔奇点）：拖动完整窗体靠近某条边
+（90px 内）时，那条边上出现一个奇点：14px 暗核 + 紫色吸积亮环，
+16 根光丝从窗体边螺旋着卷进亮环，颜色浅蓝转紫、弯曲向环里收紧、
+光点沿丝加速坠入，窗体本身也被轻轻吸向边；松手贴边后不再瞬间
+切小条，而是 440ms 坠入形变：窗体按 cubic in 加速滑向边、缩小、
+透明度先暗后亮，中途在最暗处换成小条内容，最后定在小条上。
 吸入带是独立的 Tool 悬浮层，不抢鼠标、不抢焦点，
 只在拖动时出现，松手、拖离、展开设置时都消失。
 
@@ -184,16 +183,16 @@ def _remaining_color(remaining: float) -> str:
 
 
 class SuctionOverlay(QWidget):
-    """边缘吸附动画层：一丝丝光影被牵引进边的带子。
+    """边缘吸附动画层：按奥瑞利安·索尔奇点做的吸入带。
 
-    不做任何交互，只画光丝：每条光丝都是一根细长弯曲的
-    光线，一端连在窗体边上、一端连在屏幕边上，中间带一点
-    正弦弯曲，像被边牵着走；光丝上还有一个亮点沿着丝向边
-    里跑，越近边越亮。上一版是均匀的短直线条纹，看起来
-    像整块在闪，这一版改成每根丝长短、弯曲、速度都不同，
-    才像一丝一丝的光被牵引。
-    带子本身覆盖窗体到边的间隙（不是只贴边 56px），
-    窗体越近间隙越短、光丝越短，吸入感就是丝在收缩。
+    不做任何交互，只画一个贴在边上的奇点：边上是一条
+    14px 的暗核（事件视界），暗核内侧是一圈紫色吸积亮环，
+    亮环上有亮点沿边移动（像吸积盘里的热点在转）；
+    16 根光丝从窗体边螺旋着卷进亮环：弯曲幅度向环里
+    收紧、颜色从浅蓝渐变成紫、光点沿丝加速坠入（越近
+    环跑得越快，像被引力加速），不是上一版的直线条纹。
+    带子覆盖窗体到边的间隙，窗体越近间隙越短、光丝越短，
+    吸入感就是丝在收缩进奇点。
     _progress 越近 1 越亮、光点跑得越快。
     """
 
@@ -213,9 +212,9 @@ class SuctionOverlay(QWidget):
         self._timer.timeout.connect(self._on_tick)
 
     def _on_tick(self) -> None:
-        # 光点沿丝跑的速度：慢一点才像光被牵引，不是闪烁；
-        # 越近跑得越快，phase 到 1 回 0 循环。
-        self._phase = (self._phase + 0.035 + self._progress * 0.07) % 1.0
+        # 螺旋转速：慢一点才像星光在转，不是闪烁；
+        # 越近转得越快，phase 到 1 回 0 循环。
+        self._phase = (self._phase + 0.03 + self._progress * 0.06) % 1.0
         self.update()
 
     def show_suction(self, edge: str, x: int, y: int, w: int, h: int, progress: float) -> None:
@@ -243,101 +242,138 @@ class SuctionOverlay(QWidget):
             return
         pulse = 0.85 + 0.15 * math.sin(self._phase * 2 * math.pi)
         base_alpha = int((70 + self._progress * 110) * pulse)
-        core_alpha = int((170 + self._progress * 85) * pulse)
+        rim_alpha = int((180 + self._progress * 75) * pulse)
         edge = self._edge
         horizontal = edge in ("left", "right")
-        # 光晕：边上最亮、向窗体方向淡出，只做底色，不抢光丝的戏。
-        if edge == "left":
-            grad = QLinearGradient(0, 0, w, 0)
-        elif edge == "right":
-            grad = QLinearGradient(w, 0, 0, 0)
-        elif edge == "top":
-            grad = QLinearGradient(0, 0, 0, h)
-        else:
-            grad = QLinearGradient(0, h, 0, 0)
-        grad.setColorAt(0.0, QColor(79, 195, 247, base_alpha))
-        grad.setColorAt(0.6, QColor(79, 195, 247, int(base_alpha * 0.30)))
-        grad.setColorAt(1.0, QColor(79, 195, 247, 0))
-        painter.fillRect(0, 0, w, h, grad)
-        # 边上的亮线：3px，吸入口的亮边。
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(180, 230, 255, core_alpha))
-        if edge == "left":
-            painter.drawRect(0, 0, 3, h)
-        elif edge == "right":
-            painter.drawRect(w - 3, 0, 3, h)
-        elif edge == "top":
-            painter.drawRect(0, 0, w, 3)
-        else:
-            painter.drawRect(0, h - 3, w, 3)
-        # 一丝丝光丝：16 根，每根从窗体边连到屏幕边，带正弦弯曲。
-        # 画法是分段折线：每段透明度向边里递增，靠近边最亮，
-        # 像光被边牵过去；每根丝的弯曲幅度、相位、光点位置都不同，
-        # 不会整齐划一地闪。光点沿着丝向边里跑，跑过的地方留
-        # 一小段亮尾，牵引感就来自这个光点，而不是整条丝在平移。
-        count = 16
         span = h if horizontal else w
         depth = w if horizontal else h
+        dark_w = 14
         # depth 是带子沿吸入方向的长度：窗体到边的间隙 + 20 重叠。
-        # 间隙为 0 时 depth 只剩 20，光丝就缩成边上的一小段亮光，
+        # 间隙为 0 时 depth 只剩 20，光丝就缩成暗核边上的一小段，
         # 正好是吸入完成前一刻的样子。
+        # ---- 暗核：贴边 14px 的近黑区，奇点的事件视界 ----
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(3, 7, 18, 240))
+        if edge == "left":
+            painter.drawRect(0, 0, dark_w, h)
+        elif edge == "right":
+            painter.drawRect(w - dark_w, 0, dark_w, h)
+        elif edge == "top":
+            painter.drawRect(0, 0, w, dark_w)
+        else:
+            painter.drawRect(0, h - dark_w, w, dark_w)
+        # ---- 吸积光晕：从亮环向窗体方向淡出，紫色为主 ----
+        if edge == "left":
+            grad = QLinearGradient(dark_w, 0, w, 0)
+        elif edge == "right":
+            grad = QLinearGradient(w - dark_w, 0, 0, 0)
+        elif edge == "top":
+            grad = QLinearGradient(0, dark_w, 0, h)
+        else:
+            grad = QLinearGradient(0, h - dark_w, 0, 0)
+        grad.setColorAt(0.0, QColor(167, 139, 250, base_alpha))
+        grad.setColorAt(0.5, QColor(79, 195, 247, int(base_alpha * 0.35)))
+        grad.setColorAt(1.0, QColor(79, 195, 247, 0))
+        painter.fillRect(0, 0, w, h, grad)
+        # 暗核会把光晕的边侧盖掉，重新把暗核画一遍压在光晕上。
+        painter.setBrush(QColor(3, 7, 18, 240))
+        if edge == "left":
+            painter.drawRect(0, 0, dark_w, h)
+        elif edge == "right":
+            painter.drawRect(w - dark_w, 0, dark_w, h)
+        elif edge == "top":
+            painter.drawRect(0, 0, w, dark_w)
+        else:
+            painter.drawRect(0, h - dark_w, w, dark_w)
+        # ---- 吸积亮环：暗核内侧 2px 的亮线，紫白相间 ----
+        painter.setBrush(QColor(230, 220, 255, rim_alpha))
+        if edge == "left":
+            painter.drawRect(dark_w, 0, 2, h)
+        elif edge == "right":
+            painter.drawRect(w - dark_w - 2, 0, 2, h)
+        elif edge == "top":
+            painter.drawRect(0, dark_w, w, 2)
+        else:
+            painter.drawRect(0, h - dark_w - 2, w, 2)
+        # ---- 亮环上的热点：沿边移动的亮点，像吸积盘在转 ----
+        painter.setBrush(QColor(255, 255, 255, 220))
+        for i in range(6):
+            hot_along = (self._phase * span + i * span / 6) % span
+            if edge == "left":
+                hx, hy = dark_w + 1, hot_along
+            elif edge == "right":
+                hx, hy = w - dark_w - 1, hot_along
+            elif edge == "top":
+                hx, hy = hot_along, dark_w + 1
+            else:
+                hx, hy = hot_along, h - dark_w - 1
+            painter.setBrush(QColor(167, 139, 250, 90))
+            painter.drawEllipse(int(hx - 4), int(hy - 4), 8, 8)
+            painter.setBrush(QColor(255, 255, 255, 230))
+            painter.drawEllipse(int(hx - 2), int(hy - 2), 4, 4)
+        # ---- 螺旋光丝：16 根，从窗体边卷进亮环 ----
+        # 坐标：t=0 在窗体边，t=1 在亮环处（不是在屏幕边 0 处，
+        # 光丝到亮环就被暗核吞掉，不会穿进暗核里）。
+        # 亮环在带子坐标里的位置：左 / 上是 dark_w，右 / 下是 depth-dark_w。
+        # 弯曲：正弦 + 幅度向环里收紧（1-t*0.7），像旋进涡旋；
+        # 颜色：浅蓝 -> 紫，越近环越紫越亮；光点：位置用平方加速，
+        # 窗体边慢、近环快，像被引力加速坠入。
+        count = 16
+        travel = max(1, depth - dark_w)
         for i in range(count):
-            # 沿边的位置：均匀铺开 + 每根固定抖动，不随时间跳。
             along_base = (i + 0.5) / count * span + ((i * 29) % 7 - 3)
-            wave_amp = 3.0 + (i % 4)  # 3-6px 弯曲幅度，每根不同
+            wave_amp = 4.0 + (i % 4)  # 4-7px，每根不同
             wave_phase = i * 0.9
-            # 光点在丝上的位置：0 在窗体边、1 在屏幕边，随 phase 向边跑。
-            dot_t = (self._phase * (0.7 + (i % 3) * 0.15) + i * 0.11) % 1.0
-            segments = 10
+            turns = 1.0 + (i % 3) * 0.5  # 1 / 1.5 / 2 圈，每根不同
+            segments = 12
             prev_x = prev_y = None
             for s in range(segments + 1):
-                t = s / segments  # 0 窗体边，1 屏幕边
-                # 吸入方向上的坐标：左 / 上是 depth->0，右 / 下是 0->depth。
-                # 带子坐标系里，窗体边在 depth 附近（左 / 上）或 0 附近（右 / 下），
-                # 这里统一用 t 从窗体边走到屏幕边，再映射到带子坐标。
+                t = s / segments
                 if edge == "left":
-                    px = depth - t * depth
+                    coord = depth - t * travel
                 elif edge == "right":
-                    px = t * depth
+                    coord = t * travel
                 elif edge == "top":
-                    py = depth - t * depth
-                    px = None
+                    coord = depth - t * travel
                 else:
-                    py = t * depth
-                    px = None
-                bend = math.sin(t * math.pi * 2 + wave_phase + self._phase * 2 * math.pi) * wave_amp
+                    coord = t * travel
+                amp_t = wave_amp * (1 - t * 0.7)
+                bend = math.sin(t * math.pi * 2 * turns + wave_phase + self._phase * 2 * math.pi) * amp_t
                 if horizontal:
-                    x = px
-                    y = along_base + bend
+                    x, y = coord, along_base + bend
                 else:
-                    x = along_base + bend
-                    y = py
+                    x, y = along_base + bend, coord
                 if prev_x is not None:
-                    # 越近边越亮：t 越大 alpha 越大，丝尾在窗体边是淡的。
-                    alpha = int(30 + t * (120 + self._progress * 90))
-                    pen = QPen(QColor(190, 235, 255, alpha))
+                    alpha = int(30 + t * (130 + self._progress * 90))
+                    r = int(79 + (167 - 79) * t)
+                    g = int(195 + (139 - 195) * t)
+                    b = int(247 + (250 - 247) * t)
+                    pen = QPen(QColor(r, g, b, alpha))
                     pen.setWidth(1)
                     painter.setPen(pen)
                     painter.drawLine(int(prev_x), int(prev_y), int(x), int(y))
                 prev_x, prev_y = x, y
-            # 光点：沿丝跑的亮点，位置用 dot_t 算，弯曲跟丝同一条。
+            # 光点：沿丝加速坠入，dot_phase 线性走，dot_t 平方加速。
+            dot_phase = (self._phase * (0.7 + (i % 3) * 0.15) + i * 0.11) % 1.0
+            dot_t = dot_phase * dot_phase
             if edge == "left":
-                dot_x = depth - dot_t * depth
+                dot_coord = depth - dot_t * travel
             elif edge == "right":
-                dot_x = dot_t * depth
+                dot_coord = dot_t * travel
             elif edge == "top":
-                dot_y = depth - dot_t * depth
-                dot_x = None
+                dot_coord = depth - dot_t * travel
             else:
-                dot_y = dot_t * depth
-                dot_x = None
-            dot_bend = math.sin(dot_t * math.pi * 2 + wave_phase + self._phase * 2 * math.pi) * wave_amp
+                dot_coord = dot_t * travel
+            dot_amp = wave_amp * (1 - dot_t * 0.7)
+            dot_bend = math.sin(dot_t * math.pi * 2 * turns + wave_phase + self._phase * 2 * math.pi) * dot_amp
             if horizontal:
-                dot_px, dot_py = dot_x, along_base + dot_bend
+                dot_px, dot_py = dot_coord, along_base + dot_bend
             else:
-                dot_px, dot_py = along_base + dot_bend, dot_y
+                dot_px, dot_py = along_base + dot_bend, dot_coord
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(230, 248, 255, 230))
+            painter.setBrush(QColor(167, 139, 250, 90))
+            painter.drawEllipse(int(dot_px - 5), int(dot_py - 5), 10, 10)
+            painter.setBrush(QColor(255, 255, 255, 235))
             painter.drawEllipse(int(dot_px - 2), int(dot_py - 2), 4, 4)
 
 
@@ -1031,7 +1067,7 @@ class FloatingWindow(QWidget):
         """松手吸入形变：440ms 内从完整窗体滑向边、缩小成小条。
 
         不是先闪 200ms 再瞬间切小条：每 20ms 走一步，
-        位置和尺寸按 easeInOut 从完整窗体插值到小条位置尺寸，
+        位置和尺寸按 cubic in 从完整窗体插值到小条位置尺寸，
         透明度在中途先暗到 0.3 再亮回 1.0，内容就在最暗
         的中途换成小条（藏额度区、显剩余额度标签），
         所以换内容的那一下被暗处盖住，看起来就是窗体
@@ -1067,8 +1103,9 @@ class FloatingWindow(QWidget):
         self._morph_step += 1
         total = self._morph_total
         t = min(1.0, self._morph_step / total)
-        # easeInOutCubic：开头慢、中间快、结尾慢，像被吸进去再定住。
-        eased = 4 * t * t * t if t < 0.5 else 1 - ((-2 * t + 2) ** 3) / 2
+        # cubic in：开头慢、越近环越快，像被奇点引力加速坠入，
+        # 结尾不等它慢下来就定在小条上，正好是被捕获的感觉。
+        eased = t * t * t
         sx, sy, sw, sh = self._morph_start
         bx, by, bw, bh = self._morph_target
         x = int(sx + (bx - sx) * eased)
