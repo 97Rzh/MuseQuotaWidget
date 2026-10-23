@@ -18,6 +18,14 @@
   就取消隐藏、恢复成普通悬浮窗。
 设置面板展开时不触发隐藏，点齿轮展开设置会先取消隐藏。
 
+边缘吸附动画：拖动完整窗体靠近某条边（90px 内）时，
+那条边上出现一个跟窗体对齐的发光吸入带：边上亮线 +
+向边里吸入的条纹和粒子，越靠近越亮、条纹吸入越快，
+窗体本身也被轻轻吸向那条边；松手贴边后吸入带闪一下、
+200ms 后窗体才变成小条，像被边吸进去一样。
+吸入带是独立的 Tool 悬浮层，不抢鼠标、不抢焦点，
+只在拖动时出现，松手、拖离、展开设置时都消失。
+
 控件风格参考 RamanVista：深色表面 #2B2D33 / #25272D、
 边框 #606060、主色浅蓝 #4FC3F7、卡片圆角 12、按钮圆角 6、
 滑块拇指 #4FC3F7（不引 MaterialDesign 包，只复刻颜色与样式）。
@@ -27,13 +35,14 @@
 
 from __future__ import annotations
 
+import math
 import subprocess
 import sys
 from datetime import datetime
 from typing import Optional
 
 from PySide6.QtCore import QEvent, QObject, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QFont, QMouseEvent
+from PySide6.QtGui import QColor, QFont, QLinearGradient, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -169,6 +178,122 @@ def _remaining_color(remaining: float) -> str:
     return "#4ADE80"
 
 
+class SuctionOverlay(QWidget):
+    """边缘吸附动画层：贴在某条边上的发光吸入带。
+
+    只画两样东西，不做任何交互：边上一条亮线 + 向边里
+    吸入的条纹 / 粒子。_progress 越近 1 越亮、吸入越快，
+    _phase 由 33ms 定时器推进，条纹就一格格向边里走。
+    左右边画横向条纹、上下边画纵向条纹，方向都是向边里。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(
+            parent,
+            Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint,
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self._edge = "left"
+        self._progress = 0.0
+        self._phase = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(33)
+        self._timer.timeout.connect(self._on_tick)
+
+    def _on_tick(self) -> None:
+        # 越近吸得越快：基础速度 + 靠近加成，phase 到 1 回 0 循环。
+        self._phase = (self._phase + 0.10 + self._progress * 0.18) % 1.0
+        self.update()
+
+    def show_suction(self, edge: str, x: int, y: int, w: int, h: int, progress: float) -> None:
+        self._edge = edge
+        self._progress = max(0.0, min(1.0, progress))
+        self.move(x, y)
+        self.resize(w, h)
+        if not self._timer.isActive():
+            self._timer.start()
+        if not self.isVisible():
+            self.show()
+        self.raise_()
+
+    def hide_suction(self) -> None:
+        if self._timer.isActive():
+            self._timer.stop()
+        if self.isVisible():
+            self.hide()
+
+    def paintEvent(self, event):  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return
+        # 脉动：亮度随 phase 轻微起伏，越近基底越亮。
+        pulse = 0.85 + 0.15 * math.sin(self._phase * 2 * math.pi)
+        base_alpha = int((90 + self._progress * 130) * pulse)
+        core_alpha = int((170 + self._progress * 85) * pulse)
+        edge = self._edge
+        horizontal = edge in ("left", "right")
+        # 渐变：边上最亮、向屏内淡出，像被边吸住的光晕。
+        if edge == "left":
+            grad = QLinearGradient(0, 0, w, 0)
+        elif edge == "right":
+            grad = QLinearGradient(w, 0, 0, 0)
+        elif edge == "top":
+            grad = QLinearGradient(0, 0, 0, h)
+        else:
+            grad = QLinearGradient(0, h, 0, 0)
+        grad.setColorAt(0.0, QColor(79, 195, 247, base_alpha))
+        grad.setColorAt(0.55, QColor(79, 195, 247, int(base_alpha * 0.35)))
+        grad.setColorAt(1.0, QColor(79, 195, 247, 0))
+        painter.fillRect(0, 0, w, h, grad)
+        # 边上的亮线：3px，电影里那种吸入口的亮边。
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(180, 230, 255, core_alpha))
+        if edge == "left":
+            painter.drawRect(0, 0, 3, h)
+        elif edge == "right":
+            painter.drawRect(w - 3, 0, 3, h)
+        elif edge == "top":
+            painter.drawRect(0, 0, w, 3)
+        else:
+            painter.drawRect(0, h - 3, w, 3)
+        # 吸入条纹：10 条，位置随 phase 向边里走，越近边越亮越长。
+        count = 10
+        span = h if horizontal else w
+        depth = w if horizontal else h
+        for i in range(count):
+            t = (self._phase + i / count) % 1.0
+            # t=0 在屏内最远处，t=1 刚到边：条纹就是向边里吸的轨迹。
+            along = ((i * 37) % count) / count * span + span / (2 * count)
+            inward = depth * (1.0 - t) if edge in ("left", "top") else depth * t
+            length = 14 + self._progress * 22
+            alpha = int(50 + t * 190)
+            pen = QPen(QColor(190, 235, 255, alpha))
+            pen.setWidth(2)
+            painter.setPen(pen)
+            # 条纹的头在 inward 处（向边里走的那一端），尾拖在后面：
+            # 向左吸时尾在右、向右吸时尾在左、向上吸时尾在下、向下吸时尾在上。
+            # 之前写反了会像条纹在向外跑，这里按运动方向画才像被吸进去。
+            if edge == "left":
+                painter.drawLine(int(inward), int(along), int(inward + length), int(along))
+            elif edge == "right":
+                painter.drawLine(int(inward - length), int(along), int(inward), int(along))
+            elif edge == "top":
+                painter.drawLine(int(along), int(inward), int(along), int(inward + length))
+            else:
+                painter.drawLine(int(along), int(inward - length), int(along), int(inward))
+            # 粒子：跟在条纹后面、更小的亮点，吸入感更明显。
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(220, 245, 255, alpha))
+            if horizontal:
+                painter.drawEllipse(int(inward - 2), int(along - 2), 4, 4)
+            else:
+                painter.drawEllipse(int(along - 2), int(inward - 2), 4, 4)
+
+
 class _FetchWorker(QObject):
     done = Signal(object, object)  # quota, error
 
@@ -220,6 +345,11 @@ class FloatingWindow(QWidget):
         self._bar_width = 96
         self._bar_height = 48
         self._edge_threshold = 5
+        # 吸附动画：90px 内算靠近，吸入带只在拖动完整窗体时出现。
+        self._suction_zone = 90
+        self._suction_overlay = None
+        self._suction_animating = False
+        self._suction_timer = None
         self._background_login = None
         self._fetch_thread = None
         self._fetch_worker = None
@@ -459,23 +589,21 @@ class FloatingWindow(QWidget):
         if event.type() == QEvent.MouseMove and self._drag_pos is not None and event.buttons() & Qt.LeftButton:
             self._drag_moved = True
             if self._is_bar:
-                # 小条本身在拖：只移动小条，不展开、不取消，
+                # 小条本身在拖：只移动小条，不展开、不取消、不显示吸入带，
                 # 松手时再按离边远近决定是留在边上还是变回完整窗体。
+                self._hide_suction()
                 nx, ny = self._clamp_position(
                     event.globalPosition().toPoint().x() - self._drag_pos.x(),
                     event.globalPosition().toPoint().y() - self._drag_pos.y(),
                 )
                 self.move(nx, ny)
             else:
-                # 完整窗体在拖：拖动全程钳制在屏内，拖不出边；
+                # 完整窗体在拖：_drag_full_move 里做钳制 + 吸入带 + 轻吸，
                 # 一拖动就取消隐藏，拖离边缘后松手不再自动变回小条，
                 # 除非松手时又正好贴着边（松手处理里再判）。
                 if self._hidden_edge is not None:
                     self._hidden_edge = None
-                nx, ny = self._clamp_position(
-                    event.globalPosition().toPoint().x() - self._drag_pos.x(),
-                    event.globalPosition().toPoint().y() - self._drag_pos.y(),
-                )
+                nx, ny = self._drag_full_move(event.globalPosition().toPoint())
                 self.move(nx, ny)
             return True
         if event.type() == QEvent.MouseButtonRelease:
@@ -496,6 +624,8 @@ class FloatingWindow(QWidget):
         self.gear_button.setVisible(False)
         # 隐藏体系里、完整窗体状态下，鼠标离开整个窗体就变回小条。
         # 正在拖动时不变回，否则拖动中窗体一动就被藏起来。
+        # 离开时吸入带也藏起来：吸入带只在拖动靠近时出现。
+        self._hide_suction()
         if self._hidden_edge is not None and not self._is_bar and self._drag_pos is None:
             self._hide_to_bar()
         super().leaveEvent(event)
@@ -523,6 +653,7 @@ class FloatingWindow(QWidget):
         if self._drag_pos is not None and event.buttons() & Qt.LeftButton:
             self._drag_moved = True
             if self._is_bar:
+                self._hide_suction()
                 nx, ny = self._clamp_position(
                     event.globalPosition().toPoint().x() - self._drag_pos.x(),
                     event.globalPosition().toPoint().y() - self._drag_pos.y(),
@@ -531,10 +662,7 @@ class FloatingWindow(QWidget):
             else:
                 if self._hidden_edge is not None:
                     self._hidden_edge = None
-                nx, ny = self._clamp_position(
-                    event.globalPosition().toPoint().x() - self._drag_pos.x(),
-                    event.globalPosition().toPoint().y() - self._drag_pos.y(),
-                )
+                nx, ny = self._drag_full_move(event.globalPosition().toPoint())
                 self.move(nx, ny)
         super().mouseMoveEvent(event)
 
@@ -547,6 +675,7 @@ class FloatingWindow(QWidget):
     # ---- 设置面板开关 ----
 
     def _toggle_settings(self) -> None:
+        self._hide_suction()
         self._is_settings_expanded = not self._is_settings_expanded
         if self._is_settings_expanded:
             # 展开设置面板时先取消隐藏：528 宽的面板不适合变成小条，
@@ -627,6 +756,86 @@ class FloatingWindow(QWidget):
             return "bottom"
         return None
 
+    def _nearest_edge_distance(self, x: int, y: int, w: int, h: int):
+        """到四条边里最近的那条边和距离，屏外算 0（已被钳制不会屏外）。"""
+        geom = self._screen_geometry()
+        if geom is None:
+            return None, None
+        dists = (
+            ("left", max(0, x - geom.x())),
+            ("right", max(0, (geom.x() + geom.width()) - (x + w))),
+            ("top", max(0, y - geom.y())),
+            ("bottom", max(0, (geom.y() + geom.height()) - (y + h))),
+        )
+        return min(dists, key=lambda item: item[1])
+
+    def _drag_full_move(self, global_point):
+        """完整窗体拖动一步：钳制 + 吸入带 + 轻吸，返回要 move 到的位置。
+
+        吸入动画只在拖动时算：靠近边（90px 内）就显示对应边的
+        吸入带，越近越亮；窗体也被轻轻吸向边，吸力 = (90-距离)*0.25，
+        距离 15px 左右时窗体就先贴到边上，松手即吸入。
+        吸入动画进行中（松手后 200ms）不响应新的拖动，避免动画被打断。"""
+        if self._suction_animating:
+            return self.x(), self.y()
+        raw_x = global_point.x() - self._drag_pos.x()
+        raw_y = global_point.y() - self._drag_pos.y()
+        nx, ny = self._clamp_position(raw_x, raw_y)
+        if self._is_settings_expanded:
+            self._hide_suction()
+            return nx, ny
+        edge, dist = self._nearest_edge_distance(nx, ny, self.width(), self.height())
+        if edge is None or dist is None or dist > self._suction_zone:
+            self._hide_suction()
+            return nx, ny
+        progress = 1.0 - dist / self._suction_zone
+        # 轻吸：向边里推一点，推完再钳制一次，不会推出屏外。
+        pull = (self._suction_zone - dist) * 0.25
+        if edge == "left":
+            nx, ny = self._clamp_position(int(nx - pull), ny)
+        elif edge == "right":
+            nx, ny = self._clamp_position(int(nx + pull), ny)
+        elif edge == "top":
+            nx, ny = self._clamp_position(nx, int(ny - pull))
+        else:
+            nx, ny = self._clamp_position(nx, int(ny + pull))
+        self._show_suction(edge, progress, nx, ny)
+        return nx, ny
+
+    def _show_suction(self, edge: str, progress: float, win_x: int, win_y: int) -> None:
+        """在对应边上显示吸入带，带子跟窗体沿边对齐、只在拖动时出现。"""
+        try:
+            if self._suction_overlay is None:
+                self._suction_overlay = SuctionOverlay(self)
+            geom = self._screen_geometry()
+            if geom is None:
+                return
+            band = 56
+            w, h = self.width(), self.height()
+            if edge == "left":
+                ox, oy = geom.x(), max(geom.y(), min(win_y, geom.y() + geom.height() - h))
+                ow, oh = band, h
+            elif edge == "right":
+                ox, oy = geom.x() + geom.width() - band, max(geom.y(), min(win_y, geom.y() + geom.height() - h))
+                ow, oh = band, h
+            elif edge == "top":
+                ox, oy = max(geom.x(), min(win_x, geom.x() + geom.width() - w)), geom.y()
+                ow, oh = w, band
+            else:
+                ox, oy = max(geom.x(), min(win_x, geom.x() + geom.width() - w)), geom.y() + geom.height() - band
+                ow, oh = w, band
+            self._suction_overlay.show_suction(edge, ox, oy, ow, oh, progress)
+        except Exception:
+            # 吸入带只是装饰，画不出来也不能影响拖动本身。
+            pass
+
+    def _hide_suction(self) -> None:
+        if self._suction_overlay is not None:
+            try:
+                self._suction_overlay.hide_suction()
+            except Exception:
+                pass
+
     def _on_drag_released(self) -> None:
         """松手时判一次：只在真的拖动过时才判，点一下不算拖动。
         eventFilter 和 mouseReleaseEvent 都会调这里，第一次调完
@@ -636,9 +845,13 @@ class FloatingWindow(QWidget):
         self._drag_moved = False
         if not moved:
             return
+        if self._suction_animating:
+            return
         if self._is_settings_expanded:
+            self._hide_suction()
             return
         if self._is_bar:
+            self._hide_suction()
             # 小条在拖：松手时还在边上就留在边上（边可能换了，
             # 比如从左边沿着上边拖到了上边），离边远了就变回完整窗体。
             edge = self._edge_at(self.x(), self.y(), self.width(), self.height())
@@ -649,12 +862,32 @@ class FloatingWindow(QWidget):
             else:
                 self._cancel_bar_mode(self.x(), self.y())
             return
-        # 完整窗体在拖：松手时贴着边就变小条，否则保持完整窗体。
-        # 拖动中已经把 _hidden_edge 清掉了，所以这里只用判一次：
-        # 贴边 = 新进小条，不贴边 = 正常停在屏内。
+        # 完整窗体在拖：松手时贴着边就先闪一下吸入带、200ms 后
+        # 才变成小条，像被边吸进去；不贴边就直接藏起吸入带。
         edge = self._edge_at(self.x(), self.y(), self.width(), self.height())
         if edge is not None:
+            self._start_suck_in(edge)
+        else:
+            self._hide_suction()
+
+    def _start_suck_in(self, edge: str) -> None:
+        """松手吸入：吸入带调到最亮闪 200ms，再变小条。
+
+        用带 parent 的单次定时器，窗体关掉时定时器跟着没，
+        不会在已关的窗体上再调 _enter_bar_mode。"""
+        self._suction_animating = True
+        self._show_suction(edge, 1.0, self.x(), self.y())
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+
+        def _finish():
+            self._suction_animating = False
+            self._hide_suction()
             self._enter_bar_mode(edge)
+
+        timer.timeout.connect(_finish)
+        self._suction_timer = timer
+        timer.start(200)
 
     def _bar_position(self, edge: str, ref_x: int, ref_y: int):
         """小条在边上的左上角：完全在屏内，贴着边。
@@ -673,6 +906,7 @@ class FloatingWindow(QWidget):
 
     def _enter_bar_mode(self, edge: str) -> None:
         """完整窗体 -> 小条：藏起额度区、只留剩余额度标签。"""
+        self._hide_suction()
         ref_x, ref_y = self.x(), self.y()
         self._hidden_edge = edge
         self._is_bar = True
@@ -695,6 +929,7 @@ class FloatingWindow(QWidget):
         """小条 -> 完整窗体：仍在隐藏体系里，鼠标离开后会变回小条。"""
         if self._hidden_edge is None:
             return
+        self._hide_suction()
         edge = self._hidden_edge
         bar_x, bar_y = self.x(), self.y()
         self._is_bar = False
@@ -729,6 +964,7 @@ class FloatingWindow(QWidget):
 
     def _cancel_bar_mode(self, x: int, y: int) -> None:
         """小条 -> 普通完整窗体：拖离边缘后取消隐藏，不再自动变回小条。"""
+        self._hide_suction()
         self._hidden_edge = None
         self._is_bar = False
         self.bar_label.setVisible(False)
