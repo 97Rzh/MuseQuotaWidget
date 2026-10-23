@@ -3,9 +3,10 @@
 正常时只显示额度：剩余百分比大字 + 主条 + 节奏刻度 + 重置时间，
 不显示标题、计划、已用、额外词元等字样。
 没有右键菜单：右上角齿轮按钮只在鼠标悬停时显示，平时不显示；
-点齿轮后额度区缩到左上角（大字 44→28、居中→左对齐），
-窗体从 240 宽放大到 528 宽，右侧出现 RamanVista 风格的设置面板；
-再点齿轮或面板里的“完成”可收回。
+点齿轮后窗体改为上下结构：上方只留剩余额度百分比及进度条，
+下方是设置（无明显边框，上下中间只有一条不到边的细线隔开），
+再点齿轮可收回。设置展开/收起的过渡跟边缘隐藏缩小形变同款：
+600ms、easeInOut、透明度先跌到 0.2 再亮回 1.0，中途换内容。
 
 边缘隐藏（取代旧的双击停靠 + 8px 线）：
 - 窗体永远拖不出屏幕：拖动全程按所有屏的虚拟外框钳制，
@@ -242,6 +243,16 @@ class FloatingWindow(QWidget):
         self._morph_target = None
         self._morph_edge = None
         self._morph_switched = False
+        # 设置展开/收起形变：跟边缘隐藏缩小同款，600ms、30 步、
+        # easeInOut、透明度先跌到 0.2 再亮回 1.0，中途换内容。
+        self._settings_morph_timer = None
+        self._settings_morph_step = 0
+        self._settings_morph_total = 30
+        self._settings_morph_start = None
+        self._settings_morph_target = None
+        self._settings_morph_expanding = False
+        self._settings_morph_switched = False
+        self._settings_morphing = False
         self._background_login = None
         self._fetch_thread = None
         self._fetch_worker = None
@@ -260,7 +271,7 @@ class FloatingWindow(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(card)
 
-        card_layout = QHBoxLayout(card)
+        card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(16, 14, 16, 12)
         card_layout.setSpacing(0)
         self._card_layout = card_layout
@@ -326,7 +337,7 @@ class FloatingWindow(QWidget):
         self.time_label.setStyleSheet("color: #9CA3AF; font-size: 11px;")
         quota_layout.addWidget(self.time_label)
 
-        card_layout.addWidget(self.quota_widget, 1)
+        card_layout.addWidget(self.quota_widget, 0)
 
         # ---- 边缘小条：隐藏后只显示剩余额度，平时不显示 ----
         # 小条就是主窗体本身变小，不是另外开一个窗口：隐藏时把
@@ -339,16 +350,32 @@ class FloatingWindow(QWidget):
         self.bar_label.setFont(bar_font)
         self.bar_label.setStyleSheet("color: #4ADE80;")
         self.bar_label.setVisible(False)
-        card_layout.addWidget(self.bar_label, 1)
+        card_layout.addWidget(self.bar_label, 0)
 
-        # ---- 设置面板 ----
+        # ---- 上下中间的细线：不到边，左右各留 24px ----
+        # 细线本身是 QFrame，包在一个带左右边距的容器里才不到边；
+        # 平时隐藏，设置展开时才显示。
+        self._divider_widget = QWidget()
+        divider_layout = QHBoxLayout(self._divider_widget)
+        divider_layout.setContentsMargins(24, 10, 24, 10)
+        divider_layout.setSpacing(0)
+        divider_line = QFrame()
+        divider_line.setFrameShape(QFrame.HLine)
+        divider_line.setFixedHeight(1)
+        divider_line.setStyleSheet("background-color: #606060; border: none;")
+        divider_layout.addWidget(divider_line)
+        self._divider_widget.setVisible(False)
+        card_layout.addWidget(self._divider_widget, 0)
+
+        # ---- 设置面板：上下结构，无明显边框 ----
+        # 不再是右侧 300 宽的卡片：背景透明、无边框、无圆角，
+        # 宽度跟窗体走（240 宽减去卡片边距），只靠上面那条细线隔开。
         self.settings_widget = QWidget()
         self.settings_widget.setObjectName("settingsCard")
-        self.settings_widget.setStyleSheet(SETTINGS_CARD_STYLE)
-        self.settings_widget.setFixedWidth(300)
+        self.settings_widget.setStyleSheet("QWidget#settingsCard { background-color: transparent; border: none; }")
         self.settings_widget.setVisible(False)
         settings_layout = QVBoxLayout(self.settings_widget)
-        settings_layout.setContentsMargins(16, 16, 16, 16)
+        settings_layout.setContentsMargins(0, 4, 0, 0)
         settings_layout.setSpacing(0)
 
         def section(text: str) -> None:
@@ -374,6 +401,9 @@ class FloatingWindow(QWidget):
         self.login_status_label.setStyleSheet(f"color: {SECONDARY_TEXT}; font-size: 13px;")
         settings_layout.addWidget(self.login_status_label)
         spacer(8)
+        # 登录 / 退出只显示其中一个（见 _update_login_status）：
+        # 未登录时只显登录，已登录时只显退出，两个按钮都放在
+        # 同一行布局里，隐藏的那个不占地方，显示的那个占满整行。
         account_row = QHBoxLayout()
         account_row.setSpacing(8)
         self.login_button = QPushButton("登录 Muse…")
@@ -407,41 +437,19 @@ class FloatingWindow(QWidget):
         self.interval_value_label.setAlignment(Qt.AlignCenter)
         self.interval_value_label.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px;")
         settings_layout.addWidget(self.interval_value_label)
-        note = QLabel("读的是额度接口，不是对话，不耗对话 token；过于频繁可能触发限流，建议 5 分钟以上。拖动滑块立即生效，不用点确定。")
-        note.setWordWrap(True)
-        note.setStyleSheet(f"color: {MUTED_TEXT}; font-size: 11px;")
-        settings_layout.addWidget(note)
 
+        # 删掉的控件（Ren 要求）：始终置顶、打开诊断日志、完成。
+        # 始终置顶删掉后窗体默认始终置顶（初始化时已设 StaysOnTopHint，
+        # 不再提供关掉它的开关）；完成删掉后收起设置只靠再点一次齿轮；
+        # 退出软件保留，否则无边框窗体没法正常退出。
         spacer(16)
-        section("显示")
-        spacer(6)
-        self.topmost_checkbox = QCheckBox("始终置顶")
-        self.topmost_checkbox.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 13px;")
-        self.topmost_checkbox.setChecked(True)
-        self.topmost_checkbox.clicked.connect(self._on_topmost_clicked)
-        settings_layout.addWidget(self.topmost_checkbox)
-
-        spacer(16)
-        section("其他")
-        spacer(6)
-        log_button = QPushButton("打开诊断日志")
-        log_button.setStyleSheet(SECONDARY_BUTTON_STYLE)
-        log_button.clicked.connect(self._on_open_log_clicked)
-        settings_layout.addWidget(log_button)
-        spacer(8)
         exit_button = QPushButton("退出软件")
         exit_button.setStyleSheet(DANGER_BUTTON_STYLE)
         exit_button.clicked.connect(self.close)
         settings_layout.addWidget(exit_button)
 
-        spacer(16)
-        complete_button = QPushButton("完成")
-        complete_button.setStyleSheet(PRIMARY_BUTTON_STYLE)
-        complete_button.clicked.connect(self._toggle_settings)
-        settings_layout.addWidget(complete_button)
-
         card_layout.addWidget(self.settings_widget, 0)
-        card_layout.setSpacing(16)
+        card_layout.setSpacing(0)
 
         # ---- 齿轮按钮：悬停才显示，平时不显示 ----
         self.gear_button = QPushButton("⚙")
@@ -569,48 +577,159 @@ class FloatingWindow(QWidget):
 
     # ---- 设置面板开关 ----
 
-    def _toggle_settings(self) -> None:
-        self._is_settings_expanded = not self._is_settings_expanded
-        if self._is_settings_expanded:
-            # 展开设置面板时先取消隐藏：528 宽的面板不适合变成小条，
-            # 而且展开后鼠标离开再变回小条会把设置面板也藏起来。
-            # 此时窗体已经是展开的状态，取消后就留在屏幕内。
+    def _apply_settings_content(self, expanded: bool) -> None:
+        """只换设置展开/收起时的内容，不动窗体尺寸（形变中途调它）。
+
+        expanded=True：上方只留百分比和进度条，节奏和重置时间隐藏，
+        细线和设置块显示，登录状态按当前账号刷新；
+        expanded=False：上方恢复完整（百分比、进度条、节奏、重置时间），
+        细线和设置块隐藏。卡片边距两边都是 16,14,16,12。
+        """
+        self._is_settings_expanded = expanded
+        if expanded:
             self._hidden_edge = None
             self._is_bar = False
             self.bar_label.setVisible(False)
             self.quota_widget.setVisible(True)
-            self._card_layout.setContentsMargins(16, 14, 16, 12)
-            # 先恢复面板宽度再显示，否则面板还压在 0 宽上。
-            self.settings_widget.setFixedWidth(300)
-            self.settings_widget.setVisible(True)
             self._set_quota_mini(True)
+            self._divider_widget.setVisible(True)
+            self.settings_widget.setVisible(True)
             self._update_login_status()
-            target_width = 528
         else:
+            self._divider_widget.setVisible(False)
             self.settings_widget.setVisible(False)
-            # 只隐藏不够：布局最小宽度仍可能把 300 宽的面板算进去，
-            # 收回后窗体就被顶在 528 宽下不来。直接把面板宽度压到 0。
-            self.settings_widget.setFixedWidth(0)
+            self.quota_widget.setVisible(True)
+            self.bar_label.setVisible(False)
             self._set_quota_mini(False)
-            target_width = 240
-        # 宽度用固定宽度强制，不用 resize()：resize() 会被布局
-        # 最小宽度钳制，Mac 上收回时就卡在展开宽度。高度仍自适应，
-        # 以免节奏区出现/消失时把内容裁掉。
-        self.setFixedWidth(target_width)
+            # 收起后节奏要不要显示由数据决定：有快照时 _show 会再调
+            # _show_pace，这里先按上次快照恢复一次，免得收起后节奏区空着。
+            if self._last_good is not None:
+                self._show_pace(self._last_good, max(0.0, min(100.0, self._last_good.remaining)))
+        self._card_layout.setContentsMargins(16, 14, 16, 12)
+
+    def _measure_settings_height(self, expanded: bool) -> int:
+        """在当前内容状态下量一次窗体高度（不改动最终状态）。
+
+        先把内容切到目标状态、量 sizeHint，再切回原状态：
+        量的时候会短暂切内容，但窗体尺寸还没动、形变还没开始，
+        用户看不到这一下切換，只看到形变从当前尺寸平滑过去。
+        量的时候把 _settings_morphing 置 True，免得 _show_pace 里
+        的 adjustSize 在量之前就把窗体先缩/放到目标高度，
+        形变还没开始就跳一下。
+        """
+        prev = self._is_settings_expanded
+        self._settings_morphing = True
+        try:
+            self._apply_settings_content(expanded)
+            self.updateGeometry()
+            QApplication.processEvents()
+            height = self.sizeHint().height()
+            height = max(height, self.quota_widget.sizeHint().height() + 30)
+        finally:
+            self._settings_morphing = False
+        # 切回原状态，形变从原尺寸开始。
+        self._apply_settings_content(prev)
         self.updateGeometry()
         QApplication.processEvents()
-        height = self.sizeHint().height()
-        # sizeHint 在无边框透明窗上可能偏小，至少保留额度区高度。
-        height = max(height, self.quota_widget.sizeHint().height() + 30)
-        self.resize(target_width, height)
-        # 展开后窗体也可能被推到屏外，钳制回屏内。
-        nx, ny = self._clamp_position(self.x(), self.y(), target_width, height)
-        self.move(nx, ny)
-        self.gear_button.move(self.width() - 16 - 28, 14)
-        diagnostics.log(
-            f"settings toggled: expanded={self._is_settings_expanded} "
-            f"width={self.width()} target={target_width}"
-        )
+        return height
+
+    def _toggle_settings(self) -> None:
+        """点齿轮展开/收起设置：跟边缘隐藏缩小同款形变过渡。
+
+        不再瞬间改宽：600ms、30 步、easeInOut、透明度先跌到 0.2
+        再亮回 1.0，中途换内容。宽度始终 240（上下结构，不再变 528），
+        只有高度在变：展开时变高（上方顶块 + 细线 + 设置块），
+        收起时变回完整窗体高度。形变进行中再点齿轮直接返回，
+        避免两个形变打架。
+        """
+        if self._settings_morphing or self._suction_animating:
+            return
+        expanding = not self._is_settings_expanded
+        start_x, start_y = self.x(), self.y()
+        start_w, start_h = self.width(), self.height()
+        # 目标高度：先量目标状态的高度，再切回当前状态开始形变。
+        target_h = self._measure_settings_height(expanding)
+        target_w = 240
+        # 目标位置：宽度不变，高度变后若超出屏底就往上挪，
+        # 保证展开后的大窗完整在屏内，形变时位置也平滑过去。
+        geom = self._screen_geometry()
+        target_x, target_y = start_x, start_y
+        if geom is not None:
+            target_x = max(geom.x(), min(start_x, geom.x() + geom.width() - target_w))
+            if target_h <= geom.height():
+                target_y = max(geom.y(), min(start_y, geom.y() + geom.height() - target_h))
+            else:
+                target_y = geom.y()
+        self._settings_morphing = True
+        self._settings_morph_expanding = expanding
+        self._settings_morph_start = (start_x, start_y, start_w, start_h)
+        self._settings_morph_target = (target_x, target_y, target_w, target_h)
+        self._settings_morph_step = 0
+        self._settings_morph_switched = False
+        # 形变期间固定尺寸，布局的 sizeHint 才不会把窗体抢回内容高度；
+        # 结束时再放开高度、只固定宽度 240。
+        self.setFixedSize(start_w, start_h)
+        timer = QTimer(self)
+        timer.setInterval(20)
+        timer.timeout.connect(self._on_settings_morph_tick)
+        self._settings_morph_timer = timer
+        timer.start()
+
+    def _on_settings_morph_tick(self) -> None:
+        if self._settings_morph_start is None or self._settings_morph_target is None:
+            return
+        self._settings_morph_step += 1
+        total = self._settings_morph_total
+        t = min(1.0, self._settings_morph_step / total)
+        # 跟边缘隐藏缩小同款：easeInOut，中途已变一半才换内容。
+        eased = 4 * t * t * t if t < 0.5 else 1 - ((-2 * t + 2) ** 3) / 2
+        sx, sy, sw, sh = self._settings_morph_start
+        bx, by, bw, bh = self._settings_morph_target
+        x = int(sx + (bx - sx) * eased)
+        y = int(sy + (by - sy) * eased)
+        w = int(sw + (bw - sw) * eased)
+        h = int(sh + (bh - sh) * eased)
+        opacity = 1.0 - 0.8 * math.sin(math.pi * t)
+        self.setWindowOpacity(opacity)
+        self.setFixedSize(max(20, w), max(20, h))
+        self.move(x, y)
+        if t >= 0.5 and not self._settings_morph_switched:
+            self._settings_morph_switched = True
+            # 中途换内容：换内容的那一下被最暗处盖住，看起来就是
+            # 窗体在变大/变小的同时内容也跟着变，而不是跳变。
+            self._apply_settings_content(self._settings_morph_expanding)
+        if t >= 1.0:
+            expanding = self._settings_morph_expanding
+            if self._settings_morph_timer is not None:
+                self._settings_morph_timer.stop()
+            self._settings_morph_timer = None
+            self._settings_morph_start = None
+            self._settings_morph_target = None
+            self._settings_morphing = False
+            self.setWindowOpacity(1.0)
+            if not self._settings_morph_switched:
+                self._apply_settings_content(expanding)
+            # 结束时放开高度、只固定宽度 240，定在目标尺寸和位置。
+            self.setMinimumWidth(0)
+            self.setMaximumWidth(16777215)
+            self.setMinimumHeight(0)
+            self.setMaximumHeight(16777215)
+            self.setFixedWidth(240)
+            self.updateGeometry()
+            QApplication.processEvents()
+            # 定型：宽度 240，高度按目标内容量一次，不再用插值估算。
+            # 若量出来的高度跟插值终点差几像素，以内容为准，不会跳。
+            final_h = self.sizeHint().height()
+            final_h = max(final_h, self.quota_widget.sizeHint().height() + 30)
+            # 位置按屏内钳制，避免定型后超出屏底。
+            nx, ny = self._clamp_position(self.x(), self.y(), 240, final_h)
+            self.resize(240, final_h)
+            self.move(nx, ny)
+            self.gear_button.move(self.width() - 16 - 28, 14)
+            diagnostics.log(
+                f"settings toggled: expanded={self._is_settings_expanded} "
+                f"width={self.width()} height={self.height()}"
+            )
 
     # ---- 边缘隐藏：拖不出屏 + 拖到边缘松手变小条 ----
 
@@ -838,7 +957,7 @@ class FloatingWindow(QWidget):
         if t >= 0.5 and not self._morph_switched:
             self._morph_switched = True
             self.settings_widget.setVisible(False)
-            self.settings_widget.setFixedWidth(0)
+            self._divider_widget.setVisible(False)
             self.quota_widget.setVisible(False)
             self.bar_label.setVisible(True)
             self._card_layout.setContentsMargins(8, 6, 8, 6)
@@ -857,7 +976,7 @@ class FloatingWindow(QWidget):
             # 万一中途没换（比如定时器被打断），这里补一次，不会再跳。
             if not self._morph_switched:
                 self.settings_widget.setVisible(False)
-                self.settings_widget.setFixedWidth(0)
+                self._divider_widget.setVisible(False)
                 self.quota_widget.setVisible(False)
                 self.bar_label.setVisible(True)
                 self._card_layout.setContentsMargins(8, 6, 8, 6)
@@ -893,7 +1012,7 @@ class FloatingWindow(QWidget):
         self._hidden_edge = edge
         self._is_bar = True
         self.settings_widget.setVisible(False)
-        self.settings_widget.setFixedWidth(0)
+        self._divider_widget.setVisible(False)
         self.quota_widget.setVisible(False)
         self.bar_label.setVisible(True)
         self.gear_button.setVisible(False)
@@ -970,27 +1089,43 @@ class FloatingWindow(QWidget):
             self.bar_label.setStyleSheet("color: #4ADE80;")
 
     def _set_quota_mini(self, mini: bool) -> None:
+        # mini=True = 设置展开时的上方：只留剩余额度百分比及进度条，
+        # 节奏和重置时间都不显示（不是左对齐的迷你版，是上下结构的顶块）。
+        # mini=False = 正常完整窗体：百分比、进度条、节奏、重置时间都显示。
+        # 百分比字号两边都是 44pt、居中，上下结构不需要缩到左上角。
         font = QFont()
         font.setBold(True)
-        font.setPointSize(28 if mini else 44)
+        font.setPointSize(44)
         self.remaining_label.setFont(font)
-        self.remaining_label.setAlignment(Qt.AlignLeft if mini else Qt.AlignCenter)
-        self.time_label.setAlignment(Qt.AlignLeft if mini else Qt.AlignCenter)
-        self.time_label.setStyleSheet(f"color: #9CA3AF; font-size: {10 if mini else 11}px;")
+        self.remaining_label.setAlignment(Qt.AlignCenter)
+        self.time_label.setAlignment(Qt.AlignCenter)
+        self.time_label.setStyleSheet("color: #9CA3AF; font-size: 11px;")
         pace_font = QFont()
         pace_font.setBold(True)
         pace_font.setPointSize(10)
         self.pace_label.setFont(pace_font)
-        self.pace_label.setAlignment(Qt.AlignLeft if mini else Qt.AlignCenter)
+        self.pace_label.setAlignment(Qt.AlignCenter)
+        if mini:
+            self.pace_widget.setVisible(False)
+            self.time_label.setVisible(False)
+        else:
+            self.time_label.setVisible(True)
+            # 节奏是否显示由 _show_pace 按数据决定，这里不强制显示，
+            # 否则没数据时也会出现一个“—”的空节奏区。
 
     def _update_login_status(self) -> None:
         logged_in = self._session.has_token
-        self.login_status_label.setText("已登录" if logged_in else "未登录")
+        # 登录 / 退出只显示其中一个：未登录只显登录，已登录只显退出。
+        # 登录成功显示当前账号：Muse 额度接口和 auth/check 只给
+        # viewer_id 指纹（不是邮箱/昵称，且不记不显示内部 id），
+        # 所以这里不编一个邮箱出来，只显示“当前账号：已登录”
+        # 作为当前账号状态；未登录时显示“未登录”。
+        self.login_status_label.setText("当前账号：已登录" if logged_in else "未登录")
         self.login_status_label.setStyleSheet(
             f"color: {'#4ADE80' if logged_in else SECONDARY_TEXT}; font-size: 13px;"
         )
-        self.login_button.setEnabled(not logged_in)
-        self.logout_button.setEnabled(logged_in)
+        self.login_button.setVisible(not logged_in)
+        self.logout_button.setVisible(logged_in)
 
     # ---- 面板操作 ----
 
@@ -1008,26 +1143,6 @@ class FloatingWindow(QWidget):
         if self._last_good is not None:
             self._show(self._last_good)
         # 没有上次快照时不碰时间行：启动时时间行可能是“自动登录中…”。
-
-    def _on_topmost_clicked(self) -> None:
-        checked = self.topmost_checkbox.isChecked()
-        self.setWindowFlag(Qt.WindowStaysOnTopHint, checked)
-        self.show()
-
-    def _on_open_log_clicked(self) -> None:
-        path = log_path()
-        if path.exists():
-            try:
-                if sys.platform == "darwin":
-                    subprocess.run(["open", str(path)], check=False)
-                elif sys.platform == "win32":
-                    subprocess.run(["start", "", str(path)], shell=True, check=False)
-                else:
-                    subprocess.run(["xdg-open", str(path)], check=False)
-            except Exception:
-                pass
-        else:
-            self.time_label.setText("无诊断日志")
 
     def _on_login_clicked(self) -> None:
         if try_import_webengine()[0] is None:
@@ -1168,6 +1283,11 @@ class FloatingWindow(QWidget):
         if data.weekly_reset_at is None:
             self.pace_widget.setVisible(False)
             return
+        # 设置展开时上方只留百分比和进度条，节奏不显示，
+        # 即使刚刷新到数据也不把节奏区顶出来。
+        if self._is_settings_expanded:
+            self.pace_widget.setVisible(False)
+            return
         # 节奏按现在这一刻算，不按快照的更新时间算，
         # 所以时间过去后即使额度没刷新，节奏也会跟着动。
         now = datetime.now().astimezone()
@@ -1185,6 +1305,6 @@ class FloatingWindow(QWidget):
         # 节奏文案换成两行，窗体高度要跟着长一截，否则第二行
         # 还是会被裁；小条、设置展开、形变中不调，免得把小条
         # 撑回完整窗体或把设置面板高度打乱。
-        if not self._is_bar and not self._is_settings_expanded and not self._suction_animating:
+        if not self._is_bar and not self._is_settings_expanded and not self._suction_animating and not self._settings_morphing:
             self.updateGeometry()
             self.adjustSize()
