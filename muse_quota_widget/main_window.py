@@ -21,17 +21,18 @@
   就取消隐藏、恢复成普通悬浮窗。
 设置面板展开时不触发隐藏，点齿轮展开设置会先取消隐藏。
 
-边缘灵魂抽取动画：拖动完整窗体靠近某条边（180px 内）时，
-那条边上出现一条灵魂带：从窗体边伸向边口的半透明发光带，
-带宽是窗体沿边尺寸的 60%，窗体边亮、边口处淡出，
-带子里有光点带着淡尾从窗体边漂向边口、越近边口越淡；
-窗体不再被轻吸，窗体跟鼠标走，灵魂带自己从窗体边流向边口。
+边缘传送门动画（魔兽电影传送阵边缘光影，画在窗体里）：
+拖动完整窗体靠近某条边（180px 内）时，窗体里贴着那条边
+出现一条 80px 的传送门边带，占窗体的一部分，不是窗外：
+贴边 5px 的奥术蓝亮线 + 向内 24px 柔光，亮线内侧有
+沿边流动的菱形光符，带子里有向边口卷的弧光和光尘，
+越近边越亮越快，远处也有 0.7 的底亮，不用等贴边。
+窗体跟鼠标走，不再被轻吸；传送门边带是窗体自己的子 widget，
+层级在卡片之上、鼠标穿透，拖动时必显示，拖动中 leave 不藏它。
 松手贴边后不再瞬间切小条，而是 600ms 形变过渡：窗体
 按 easeInOut 滑向边、缩小、透明度先跌到 0.2 再亮回 1.0，
-中途在最暗处换成小条内容，最后定在小条上，像灵魂被抽走
-后又在小条里重聚。灵魂带是独立的 Tool 悬浮层，不抢鼠标、
-不抢焦点，只在拖动时出现，松手、拖离、展开设置时都消失。
-双屏屏间交界不算边，拖过交界不会出灵魂带、不会变小条。
+中途在最暗处换成小条内容并藏掉传送门带，最后定在小条上。
+双屏屏间交界不算边，拖过交界不会出传送门边带、不会变小条。
 
 控件风格参考 RamanVista：深色表面 #2B2D33 / #25272D、
 边框 #606060、主色浅蓝 #4FC3F7、卡片圆角 12、按钮圆角 6、
@@ -185,59 +186,58 @@ def _remaining_color(remaining: float) -> str:
     return "#4ADE80"
 
 
-class SuctionOverlay(QWidget):
-    """边缘灵魂抽取动画层：像灵魂被抽出窗体、流向边。
+class PortalEdgeWidget(QWidget):
+    """窗内的传送门边缘：魔兽电影传送阵那种边缘光影，画在窗体里。
 
-    不做任何交互，只画三样东西，没有暗核、没有螺旋、没有热点：
-    1) 边上的一道柔和亮线（灵魂要去的口子），带一点脉动；
-    2) 一条从窗体边伸向边的灵魂带：不是细线，是一条
-       半透明、带波浪边的发光带，窗体边亮、边口处淡出，
-       像灵魂的尾巴在消散，带宽是窗体沿边尺寸的 60%，
-       从窗体中心伸出，不是铺满整个窗体高度；
-    3) 带子里流动的光点 / 光尘：从窗体边出发、向边口漂，
-       越近边口越淡（被口子收走），不是越近越亮，
-       每个光点后面拖一小段淡尾，看起来就是灵魂在流。
-    带子覆盖窗体到边的间隙 + 40px 重叠进窗体边，
-    重叠那一段就是窗体边在发光（灵魂正在离开身体）。
-    _progress 越近 1 越亮，但远处也有 0.5 的底亮，
-    不会 180px 外就淡到看不见。
+    不是外挂在窗外的悬浮层——外挂层会被主窗盖住重叠部分，
+    用户只能看到窗外那一段，还会在拖动时触发主窗的 leave
+    把动画藏掉，这就是上一版“不贴边不出现、只在窗外出现”
+    的根因。改成窗体自己的子 widget，位置跟窗体走，
+    层级在卡片之上、鼠标穿透，拖动时必显示、必占窗体一部分。
+    位置：贴着要去的那条边，占窗体里 80px 宽（左/右）或
+    80px 高（上/下）的一条带，带子是半透明的，额度字还能透出来。
+    画法（参考魔兽电影传送阵的边缘光影，不是照抄符文）：
+    1) 边口亮线：贴边 5px 的亮线，奥术蓝 + 青白，带脉动，
+       亮线向内有 24px 的柔光渐变，像传送门的光晕；
+    2) 符文：沿亮线流动的小菱形光符，大小、亮度、速度都不同，
+       像传送阵边缘的符文在转，越近边口符文越亮越快；
+    3) 漩涡能量：带子里从内侧向边口卷的弧光，几条弯曲的
+       发光带 + 光尘向边口漂、越近边口越淡（被传送门收走），
+       颜色奥术蓝为主、带一点紫，整体是发光的，不是黑的。
+    _progress 越近 1 越亮，但远处也有 0.7 的底亮，
+    180px 外拖近时就能看见，不用等贴边。
     """
 
     def __init__(self, parent=None):
-        super().__init__(
-            parent,
-            Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint,
-        )
+        super().__init__(parent)
+        # 子 widget，不是 Tool 悬浮层：跟窗体走、层级在卡片之上、
+        # 鼠标穿透不挡拖动和点击，WA_TranslucentBackground 让
+        # 没画到的地方完全透明，额度字能透出来。
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WA_ShowWithoutActivating)
         self._edge = "left"
         self._progress = 0.0
         self._phase = 0.0
         self._timer = QTimer(self)
         self._timer.setInterval(33)
         self._timer.timeout.connect(self._on_tick)
+        self.hide()
 
     def _on_tick(self) -> None:
-        # 灵魂流动速度：慢而稳，像幽灵在漂，不是闪烁。
         self._phase = (self._phase + 0.025 + self._progress * 0.05) % 1.0
         self.update()
 
-    def show_suction(self, edge: str, x: int, y: int, w: int, h: int, progress: float) -> None:
+    def show_portal(self, edge: str, progress: float) -> None:
         self._edge = edge
         self._progress = max(0.0, min(1.0, progress))
-        was_visible = self.isVisible()
-        self.move(x, y)
-        self.resize(w, h)
         if not self._timer.isActive():
             self._timer.start()
-        if not was_visible:
+        if not self.isVisible():
             self.show()
-            self.raise_()
-        # 已显示时不再 raise：拖动每步都 raise 会在 Windows 上
-        # 反复改层级、看起来就是闪，move/resize 本身已够刷新。
+        self.raise_()
+        self.update()
 
-    def hide_suction(self) -> None:
+    def hide_portal(self) -> None:
         if self._timer.isActive():
             self._timer.stop()
         if self.isVisible():
@@ -253,100 +253,126 @@ class SuctionOverlay(QWidget):
         horizontal = edge in ("left", "right")
         span = h if horizontal else w
         depth = w if horizontal else h
-        # 远处也有底亮：0.5 + 0.5*progress，180px 外仍看得见。
-        bright = 0.5 + 0.5 * self._progress
+        # 远处也有底亮：0.7 + 0.3*progress，180px 外仍清楚。
+        bright = 0.7 + 0.3 * self._progress
         pulse = 0.85 + 0.15 * math.sin(self._phase * 2 * math.pi)
-        # 窗体边 / 边口在带子坐标里的位置：
-        # 左：窗体边在右（depth），边口在左（0）；
-        # 右：窗体边在左（0），边口在右（depth）；
-        # 上：窗体边在下（depth），边口在上（0）；
-        # 下：窗体边在上（0），边口在下（depth）。
-        # t=0 在窗体边，t=1 在边口。
-        def along_coord(t: float) -> float:
+        # t=0 在带子内侧（靠近窗体中心），t=1 在边口（窗体边）。
+        # 左：边口在左（x=0），内侧在右（x=depth）；
+        # 右：边口在右（x=depth），内侧在左（x=0）；
+        # 上：边口在上（y=0），内侧在下（y=depth）；
+        # 下：边口在下（y=depth），内侧在上（y=0）。
+        def edge_coord(t: float) -> float:
             if edge in ("left", "top"):
                 return depth - t * depth
             return t * depth
+        # edge_coord(t)：t=0 内侧，t=1 边口，弧光和光尘都按这个走。
         center = span / 2.0
-        half = span * 0.30  # 灵魂带宽 = 窗体沿边尺寸的 60%
-        # ---- 灵魂带：波浪边的发光带，窗体边亮、边口淡出 ----
-        path = QPainterPath()
-        top_pts = []
-        bot_pts = []
-        steps = 16
-        for s in range(steps + 1):
-            t = s / steps
-            coord = along_coord(t)
-            # 波浪：上下边反相，带宽会轻轻起伏，像灵魂在飘。
-            wave = math.sin(t * math.pi * 3 + self._phase * 2 * math.pi) * 6
-            top_pts.append((coord, center - half + wave))
-            bot_pts.append((coord, center + half - wave))
-        if horizontal:
-            path.moveTo(top_pts[0][0], top_pts[0][1])
-            for x, y in top_pts[1:]:
-                path.lineTo(x, y)
-            for x, y in reversed(bot_pts):
-                path.lineTo(x, y)
-            path.closeSubpath()
-            if edge == "left":
-                grad = QLinearGradient(depth, 0, 0, 0)
-            else:
-                grad = QLinearGradient(0, 0, depth, 0)
-        else:
-            path.moveTo(top_pts[0][1], top_pts[0][0])
-            for coord, along in top_pts[1:]:
-                path.lineTo(along, coord)
-            for coord, along in reversed(bot_pts):
-                path.lineTo(along, coord)
-            path.closeSubpath()
-            if edge == "top":
-                grad = QLinearGradient(0, depth, 0, 0)
-            else:
-                grad = QLinearGradient(0, 0, 0, depth)
-        # 渐变：窗体边最亮，边口处淡到几乎透明（被口子收走）。
-        grad.setColorAt(0.0, QColor(210, 240, 255, int(190 * bright * pulse)))
-        grad.setColorAt(0.55, QColor(160, 210, 255, int(120 * bright * pulse)))
-        grad.setColorAt(1.0, QColor(190, 235, 255, int(25 * bright)))
         painter.setPen(Qt.NoPen)
-        painter.setBrush(grad)
-        painter.drawPath(path)
-        # ---- 边口亮线：4px 柔和亮线，不是黑杠 ----
-        painter.setBrush(QColor(235, 250, 255, int((170 + self._progress * 70) * pulse)))
+        # ---- 1) 边口柔光：从边口向内 24px 淡出 ----
         if edge == "left":
-            painter.drawRect(0, 0, 4, h)
+            grad = QLinearGradient(0, 0, min(24, depth), 0)
         elif edge == "right":
-            painter.drawRect(w - 4, 0, 4, h)
+            grad = QLinearGradient(depth, 0, max(0, depth - 24), 0)
         elif edge == "top":
-            painter.drawRect(0, 0, w, 4)
+            grad = QLinearGradient(0, 0, 0, min(24, depth))
         else:
-            painter.drawRect(0, h - 4, w, 4)
-        # ---- 流动光点：从窗体边漂向边口，越近边口越淡 ----
-        for i in range(10):
-            # 每个光点速度、相位都不同，不会整齐划一。
-            dot_phase = (self._phase * (0.6 + (i % 3) * 0.2) + i * 0.13) % 1.0
-            t = dot_phase  # 0 窗体边，1 边口
-            coord = along_coord(t)
-            # 光点在带子里的上下位置：跟随波浪，但幅度小一点。
-            wave = math.sin(t * math.pi * 3 + self._phase * 2 * math.pi + i) * 5
-            along = center + wave + ((i * 17) % 11 - 5)
+            grad = QLinearGradient(0, depth, 0, max(0, depth - 24))
+        grad.setColorAt(0.0, QColor(120, 210, 255, int(150 * bright * pulse)))
+        grad.setColorAt(1.0, QColor(120, 210, 255, 0))
+        painter.fillRect(0, 0, w, h, grad)
+        # ---- 2) 边口亮线：贴边 5px，奥术蓝 + 青白 ----
+        rim_alpha = int((190 + self._progress * 60) * pulse)
+        painter.setBrush(QColor(220, 245, 255, rim_alpha))
+        if edge == "left":
+            painter.drawRect(0, 0, 5, h)
+        elif edge == "right":
+            painter.drawRect(w - 5, 0, 5, h)
+        elif edge == "top":
+            painter.drawRect(0, 0, w, 5)
+        else:
+            painter.drawRect(0, h - 5, w, 5)
+        # ---- 3) 符文：沿亮线流动的菱形光符 ----
+        # 符文在亮线内侧 12px 处排一列，沿边流动，大小亮度各不同。
+        for i in range(7):
+            # 符文位置：沿边流动，速度随 progress 变快。
+            run_phase = (self._phase * (0.8 + (i % 3) * 0.2) + i * 0.14) % 1.0
+            along = run_phase * span
+            # 符文离边口的距离：8-16px，贴着亮线内侧。
+            off = 10 + (i % 3) * 3
+            if edge == "left":
+                rx, ry = off, along
+            elif edge == "right":
+                rx, ry = depth - off, along
+            elif edge == "top":
+                rx, ry = along, off
+            else:
+                rx, ry = along, depth - off
+            size = 4 + (i % 3) * 2
+            alpha = int((150 + (i % 3) * 40) * bright * pulse)
+            # 菱形：用路径画，不是圆点，才像符文。
+            path = QPainterPath()
+            if horizontal:
+                path.moveTo(rx, ry - size)
+                path.lineTo(rx + size // 2, ry)
+                path.lineTo(rx, ry + size)
+                path.lineTo(rx - size // 2, ry)
+            else:
+                path.moveTo(rx - size, ry)
+                path.lineTo(rx, ry + size // 2)
+                path.lineTo(rx + size, ry)
+                path.lineTo(rx, ry - size // 2)
+            path.closeSubpath()
+            painter.setBrush(QColor(190, 235, 255, alpha))
+            painter.drawPath(path)
+            painter.setBrush(QColor(255, 255, 255, int(alpha * 0.7)))
+            if horizontal:
+                painter.drawEllipse(int(rx - 1), int(ry - 1), 2, 2)
+            else:
+                painter.drawEllipse(int(rx - 1), int(ry - 1), 2, 2)
+        # ---- 4) 漩涡能量：带子里向边口卷的弧光 + 光尘 ----
+        # 弧光：3 条从内侧向边口弯的发光带，弯曲随 phase 流动。
+        for j in range(3):
+            # 弧光在带子里的中心线：沿边方向在中心附近，带宽约 60%。
+            base_along = center + (j - 1) * span * 0.18
+            segments = 14
+            prev_x = prev_y = None
+            for s in range(segments + 1):
+                t = s / segments  # 0 内侧，1 边口
+                coord = edge_coord(t)
+                # 弯曲：正弦 + phase 流动，像漩涡在转。
+                bend = math.sin(t * math.pi * 2 + self._phase * 2 * math.pi + j * 1.1) * 8
+                along = base_along + bend * (1 - t * 0.5)
+                if horizontal:
+                    x, y = coord, along
+                else:
+                    x, y = along, coord
+                if prev_x is not None:
+                    # 越近边口越亮（被传送门吸过去），但不刺眼。
+                    alpha = int((40 + t * 130) * bright)
+                    # 颜色：内侧蓝、边口青白，带一点紫。
+                    r = int(120 + (200 - 120) * t)
+                    g = int(200 + (245 - 200) * t)
+                    b = int(255)
+                    pen = QPen(QColor(r, g, b, alpha))
+                    pen.setWidth(2)
+                    painter.setPen(pen)
+                    painter.drawLine(int(prev_x), int(prev_y), int(x), int(y))
+                prev_x, prev_y = x, y
+        # 光尘：8 个从内侧漂向边口的小光点，越近边口越淡（被收走）。
+        painter.setPen(Qt.NoPen)
+        for i in range(8):
+            dot_phase = (self._phase * (0.7 + (i % 3) * 0.2) + i * 0.12) % 1.0
+            t = dot_phase
+            coord = edge_coord(t)
+            wave = math.sin(t * math.pi * 2 + self._phase * 2 * math.pi + i) * 6
+            along = center + wave + ((i * 19) % 13 - 6)
             if horizontal:
                 dx, dy = coord, along
             else:
                 dx, dy = along, coord
-            # 尾：向窗体边拖 3 个淡点，光点才像在流，不是一闪一闪的点。
-            for k, (trail_alpha, trail_r) in enumerate(((90, 7), (55, 5), (30, 3))):
-                tt = max(0.0, t - (k + 1) * 0.06)
-                tcoord = along_coord(tt)
-                twave = math.sin(tt * math.pi * 3 + self._phase * 2 * math.pi + i) * 5
-                if horizontal:
-                    tx, ty = tcoord, center + twave + ((i * 17) % 11 - 5)
-                else:
-                    tx, ty = center + twave + ((i * 17) % 11 - 5), tcoord
-                painter.setBrush(QColor(190, 235, 255, int(trail_alpha * bright)))
-                painter.drawEllipse(int(tx - trail_r // 2), int(ty - trail_r // 2), trail_r, trail_r)
-            # 光点本体：越近边口越淡（被收走），不是越近越亮。
-            alpha = int(230 * (1 - t * 0.55) * bright)
-            size = 6 + (i % 3) * 2
-            painter.setBrush(QColor(190, 235, 255, 70))
+            alpha = int(200 * (1 - t * 0.5) * bright)
+            size = 3 + (i % 3)
+            painter.setBrush(QColor(190, 235, 255, 60))
             painter.drawEllipse(int(dx - size), int(dy - size), size * 2, size * 2)
             painter.setBrush(QColor(255, 255, 255, alpha))
             painter.drawEllipse(int(dx - size // 2), int(dy - size // 2), size, size)
@@ -403,11 +429,11 @@ class FloatingWindow(QWidget):
         self._bar_width = 96
         self._bar_height = 48
         self._edge_threshold = 5
-        # 灵魂抽取动画：180px 内算靠近，灵魂带只在拖动完整窗体时出现。
+        # 传送门动画：180px 内算靠近，传送门边带只在拖动完整窗体时出现。
         # 之前 90px 太小，拖得快一点就几乎看不到靠近过程，
         # 只看到贴边那一刻的形变，才会觉得“不贴上不触发”。
-        self._suction_zone = 180
-        self._suction_overlay = None
+        self._portal_zone = 180
+        self._portal_widget = None
         self._suction_animating = False
         self._suction_timer = None
         # 吸入形变：松手后 600ms 内从完整窗体滑向边、缩小成小条，
@@ -659,16 +685,16 @@ class FloatingWindow(QWidget):
         if event.type() == QEvent.MouseMove and self._drag_pos is not None and event.buttons() & Qt.LeftButton:
             self._drag_moved = True
             if self._is_bar:
-                # 小条本身在拖：只移动小条，不展开、不取消、不显示灵魂带，
+                # 小条本身在拖：只移动小条，不展开、不取消、不显示传送门边带，
                 # 松手时再按离边远近决定是留在边上还是变回完整窗体。
-                self._hide_suction()
+                self._hide_portal()
                 nx, ny = self._clamp_position(
                     event.globalPosition().toPoint().x() - self._drag_pos.x(),
                     event.globalPosition().toPoint().y() - self._drag_pos.y(),
                 )
                 self.move(nx, ny)
             else:
-                # 完整窗体在拖：_drag_full_move 里做钳制 + 灵魂带，
+                # 完整窗体在拖：_drag_full_move 里做钳制 + 传送门边带，
                 # 一拖动就取消隐藏，拖离边缘后松手不再自动变回小条，
                 # 除非松手时又正好贴着边（松手处理里再判）。
                 if self._hidden_edge is not None:
@@ -694,8 +720,12 @@ class FloatingWindow(QWidget):
         self.gear_button.setVisible(False)
         # 隐藏体系里、完整窗体状态下，鼠标离开整个窗体就变回小条。
         # 正在拖动时不变回，否则拖动中窗体一动就被藏起来。
-        # 离开时灵魂带也藏起来：灵魂带只在拖动靠近时出现。
-        self._hide_suction()
+        # 传送门边带也一样：拖动中 leave 绝不能藏，否则拖动时
+        # 鼠标一动到边带上（边带是窗内子 widget）就把动画藏掉，
+        # 下一步拖动又显示出来，来回闪、看起来就是不贴边不出现。
+        # 只有没在拖动时，离开才藏传送门边带。
+        if self._drag_pos is None:
+            self._hide_portal()
         if self._hidden_edge is not None and not self._is_bar and self._drag_pos is None:
             self._hide_to_bar()
         super().leaveEvent(event)
@@ -723,7 +753,7 @@ class FloatingWindow(QWidget):
         if self._drag_pos is not None and event.buttons() & Qt.LeftButton:
             self._drag_moved = True
             if self._is_bar:
-                self._hide_suction()
+                self._hide_portal()
                 nx, ny = self._clamp_position(
                     event.globalPosition().toPoint().x() - self._drag_pos.x(),
                     event.globalPosition().toPoint().y() - self._drag_pos.y(),
@@ -745,7 +775,7 @@ class FloatingWindow(QWidget):
     # ---- 设置面板开关 ----
 
     def _toggle_settings(self) -> None:
-        self._hide_suction()
+        self._hide_portal()
         self._is_settings_expanded = not self._is_settings_expanded
         if self._is_settings_expanded:
             # 展开设置面板时先取消隐藏：528 宽的面板不适合变成小条，
@@ -840,7 +870,7 @@ class FloatingWindow(QWidget):
         return min(geoms, key=_dist_to_rect)
 
     def _screen_geometry(self):
-        """窗体当前所在屏的可视区：小条 / 灵魂带 / 展开位置都按这块屏算，
+        """窗体当前所在屏的可视区：小条 / 传送门边带 / 展开位置都按这块屏算，
         不是按虚拟外框算，否则错开的屏上小条会定在死角里看不见。"""
         geom = self._screen_containing_window(self.x(), self.y(), self.width(), self.height())
         if geom is not None:
@@ -914,7 +944,7 @@ class FloatingWindow(QWidget):
 
     def _nearest_edge_distance(self, x: int, y: int, w: int, h: int):
         """到最近的真实外边的距离：只算窗体所在屏的真实外边，
-        屏间交界不参与，拖过交界时灵魂带不会误出。"""
+        屏间交界不参与，拖过交界时传送门边带不会误出。"""
         geom = self._screen_containing_window(x, y, w, h)
         if geom is None:
             return None, None
@@ -932,11 +962,11 @@ class FloatingWindow(QWidget):
         return min(dists, key=lambda item: item[1])
 
     def _drag_full_move(self, global_point):
-        """完整窗体拖动一步：钳制 + 灵魂带，返回要 move 到的位置。
+        """完整窗体拖动一步：钳制 + 传送门边带，返回要 move 到的位置。
 
         吸入动画只在拖动时算：靠近边（90px 内）就显示对应边的
-        灵魂带，越近越亮；窗体不再被轻吸，窗体跟鼠标走，
-        灵魂带自己从窗体边流向边口——之前轻吸 (180-距离)*0.25
+        传送门边带，越近越亮；窗体不再被轻吸，窗体跟鼠标走，
+        传送门边带自己从窗体边流向边口——之前轻吸 (180-距离)*0.25
         让窗体在鼠标还差 18px 时就先贴到边上，靠近过程
         被压缩到几乎看不见，才会觉得“不贴上不触发”。
         形变进行中不响应新的拖动，避免动画被打断。"""
@@ -946,59 +976,48 @@ class FloatingWindow(QWidget):
         raw_y = global_point.y() - self._drag_pos.y()
         nx, ny = self._clamp_position(raw_x, raw_y)
         if self._is_settings_expanded:
-            self._hide_suction()
+            self._hide_portal()
             return nx, ny
         edge, dist = self._nearest_edge_distance(nx, ny, self.width(), self.height())
-        if edge is None or dist is None or dist > self._suction_zone:
-            self._hide_suction()
+        if edge is None or dist is None or dist > self._portal_zone:
+            self._hide_portal()
             return nx, ny
-        progress = 1.0 - dist / self._suction_zone
+        progress = 1.0 - dist / self._portal_zone
         # 不再轻吸：窗体位置就是鼠标拖到的位置（已钳制），
-        # 灵魂带的长度 = 窗体到边的间隙，靠近过程完整可见。
-        self._show_suction(edge, progress, nx, ny)
+        # 传送门边带的长度 = 窗体到边的间隙，靠近过程完整可见。
+        self._show_portal(edge, progress, nx, ny)
         return nx, ny
 
-    def _show_suction(self, edge: str, progress: float, win_x: int, win_y: int) -> None:
-        """在对应边上显示灵魂带，带子跟窗体沿边对齐、只在拖动时出现。
+    def _show_portal(self, edge: str, progress: float, win_x: int = 0, win_y: int = 0) -> None:
+        """在窗体里显示传送门边带：贴着要去的那条边、占窗体一部分。
 
-        带子覆盖窗体到边的间隙 + 40px 重叠进窗体边，
-        重叠那一段就是窗体边在发光（灵魂正在离开身体），
-        灵魂带才能从窗体里伸出来、流向边口，而不是只在边上闪。
-        窗体越近间隙越短、灵魂带越短，灵魂就越接近被完全抽走。
+        不再是窗外的悬浮层：窗内子 widget，位置跟窗体走，
+        层级在卡片之上、鼠标穿透，拖动时必显示。
+        左/右：占窗体里 80px 宽、整高的一条带；上/下：占 80px 高、整宽。
+        win_x/win_y 现在只是兼容旧调用，窗内位置不需要屏幕坐标。
         """
         try:
-            if self._suction_overlay is None:
-                self._suction_overlay = SuctionOverlay(self)
-            geom = self._screen_geometry()
-            if geom is None:
-                return
-            overlap = 40
+            if self._portal_widget is None:
+                self._portal_widget = PortalEdgeWidget(self)
             w, h = self.width(), self.height()
+            strip = 80
             if edge == "left":
-                gap = max(0, win_x - geom.x())
-                ox, oy = geom.x(), max(geom.y(), min(win_y, geom.y() + geom.height() - h))
-                ow, oh = gap + overlap, h
+                self._portal_widget.setGeometry(0, 0, min(strip, w), h)
             elif edge == "right":
-                gap = max(0, (geom.x() + geom.width()) - (win_x + w))
-                ox, oy = win_x + w - overlap, max(geom.y(), min(win_y, geom.y() + geom.height() - h))
-                ow, oh = gap + overlap, h
+                self._portal_widget.setGeometry(max(0, w - strip), 0, min(strip, w), h)
             elif edge == "top":
-                gap = max(0, win_y - geom.y())
-                ox, oy = max(geom.x(), min(win_x, geom.x() + geom.width() - w)), geom.y()
-                ow, oh = w, gap + overlap
+                self._portal_widget.setGeometry(0, 0, w, min(strip, h))
             else:
-                gap = max(0, (geom.y() + geom.height()) - (win_y + h))
-                ox, oy = max(geom.x(), min(win_x, geom.x() + geom.width() - w)), win_y + h - overlap
-                ow, oh = w, gap + overlap
-            self._suction_overlay.show_suction(edge, ox, oy, ow, oh, progress)
+                self._portal_widget.setGeometry(0, max(0, h - strip), w, min(strip, h))
+            self._portal_widget.show_portal(edge, progress)
         except Exception:
-            # 灵魂带只是装饰，画不出来也不能影响拖动本身。
+            # 传送门边带只是装饰，画不出来也不能影响拖动本身。
             pass
 
-    def _hide_suction(self) -> None:
-        if self._suction_overlay is not None:
+    def _hide_portal(self) -> None:
+        if self._portal_widget is not None:
             try:
-                self._suction_overlay.hide_suction()
+                self._portal_widget.hide_portal()
             except Exception:
                 pass
 
@@ -1014,10 +1033,10 @@ class FloatingWindow(QWidget):
         if self._suction_animating:
             return
         if self._is_settings_expanded:
-            self._hide_suction()
+            self._hide_portal()
             return
         if self._is_bar:
-            self._hide_suction()
+            self._hide_portal()
             # 小条在拖：松手时还在边上就留在边上（边可能换了，
             # 比如从左边沿着上边拖到了上边），离边远了就变回完整窗体。
             edge = self._edge_at(self.x(), self.y(), self.width(), self.height())
@@ -1028,22 +1047,22 @@ class FloatingWindow(QWidget):
             else:
                 self._cancel_bar_mode(self.x(), self.y())
             return
-        # 完整窗体在拖：松手时贴着边就进灵魂形变，不贴边就直接藏起灵魂带。
+        # 完整窗体在拖：松手时贴着边就进传送门形变，不贴边就直接藏起传送门边带。
         edge = self._edge_at(self.x(), self.y(), self.width(), self.height())
         if edge is not None:
             self._start_suck_in(edge)
         else:
-            self._hide_suction()
+            self._hide_portal()
 
     def _start_suck_in(self, edge: str) -> None:
-        """松手灵魂形变：600ms 内从完整窗体滑向边、缩小成小条。
+        """松手传送门形变：600ms 内从完整窗体滑向边、缩小成小条。
 
         每 20ms 走一步，位置和尺寸按 easeInOut 从完整窗体
         插值到小条位置尺寸，透明度在中途先跌到 0.2 再亮回 1.0，
         内容就在最暗的中途换成小条（藏额度区、显剩余额度标签），
-        所以换内容的那一下被暗处盖住，看起来就是灵魂被抽走、
+        所以换内容的那一下被暗处盖住，看起来就是能量被传送门收走、
         身体变幽灵、最后在小条里重聚，而不是跳变。
-        形变中灵魂带保持最亮、跟着窗体缩短，直到形变结束。
+        形变中传送门边带保持最亮、跟着窗体缩短，直到形变结束。
         定时器带 parent，窗体关掉时跟着没，不会在已关
         的窗体上再跑形变。"""
         if self._suction_animating:
@@ -1061,7 +1080,7 @@ class FloatingWindow(QWidget):
         # 先放开固定宽度，形变才能改宽度；结束时再压回小条宽度。
         self.setMinimumWidth(0)
         self.setMaximumWidth(16777215)
-        self._show_suction(edge, 1.0, start_x, start_y)
+        self._show_portal(edge, 1.0, start_x, start_y)
         timer = QTimer(self)
         timer.setInterval(20)
         timer.timeout.connect(self._on_morph_tick)
@@ -1085,7 +1104,7 @@ class FloatingWindow(QWidget):
         y = int(sy + (by - sy) * eased)
         w = int(sw + (bw - sw) * eased)
         h = int(sh + (bh - sh) * eased)
-        # 透明度先跌后亮：中途最暗 0.2（灵魂被抽走、身体变幽灵），
+        # 透明度先跌后亮：中途最暗 0.2（能量被传送门收走、身体变幽灵），
         # 换内容就藏在暗处，亮回来时已是小条。
         opacity = 1.0 - 0.8 * math.sin(math.pi * t)
         self.setWindowOpacity(opacity)
@@ -1096,15 +1115,19 @@ class FloatingWindow(QWidget):
         # 但中途不调能让形变更稳。
         if t >= 0.5 and not self._morph_switched:
             self._morph_switched = True
+            # 中途换小条时先藏传送门：小条只有 96x48，传送门带 80px
+            # 会把小条标签盖住，藏掉后小条才干净。
+            self._hide_portal()
             self.settings_widget.setVisible(False)
             self.settings_widget.setFixedWidth(0)
             self.quota_widget.setVisible(False)
             self.bar_label.setVisible(True)
             self._card_layout.setContentsMargins(8, 6, 8, 6)
             self._sync_bar_label()
-        # 灵魂带跟着窗体缩短：间隙越小灵魂带越短，直到形变结束。
-        if self._morph_edge is not None:
-            self._show_suction(self._morph_edge, 1.0, x, y)
+        # 形变前半段：传送门边带跟着窗体尺寸走（窗内位置自动跟窗体，
+        # 这里只更新边和亮度，几何在 _show_portal 里按当前窗体尺寸算）。
+        if self._morph_edge is not None and not self._morph_switched:
+            self._show_portal(self._morph_edge, 1.0)
         if t >= 1.0:
             edge = self._morph_edge
             if self._morph_timer is not None:
@@ -1115,7 +1138,7 @@ class FloatingWindow(QWidget):
             self._morph_edge = None
             self._suction_animating = False
             self.setWindowOpacity(1.0)
-            self._hide_suction()
+            self._hide_portal()
             # 真正定在小条上：内容、边距、标签都已在中途换好，
             # 万一中途没换（比如定时器被打断），这里补一次，不会再跳。
             if not self._morph_switched:
@@ -1152,7 +1175,7 @@ class FloatingWindow(QWidget):
 
     def _enter_bar_mode(self, edge: str) -> None:
         """完整窗体 -> 小条：藏起额度区、只留剩余额度标签。"""
-        self._hide_suction()
+        self._hide_portal()
         ref_x, ref_y = self.x(), self.y()
         self._hidden_edge = edge
         self._is_bar = True
@@ -1175,7 +1198,7 @@ class FloatingWindow(QWidget):
         """小条 -> 完整窗体：仍在隐藏体系里，鼠标离开后会变回小条。"""
         if self._hidden_edge is None:
             return
-        self._hide_suction()
+        self._hide_portal()
         edge = self._hidden_edge
         bar_x, bar_y = self.x(), self.y()
         self._is_bar = False
@@ -1210,7 +1233,7 @@ class FloatingWindow(QWidget):
 
     def _cancel_bar_mode(self, x: int, y: int) -> None:
         """小条 -> 普通完整窗体：拖离边缘后取消隐藏，不再自动变回小条。"""
-        self._hide_suction()
+        self._hide_portal()
         self._hidden_edge = None
         self._is_bar = False
         self.bar_label.setVisible(False)
