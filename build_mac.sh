@@ -23,11 +23,16 @@ python3 -m pip install -r requirements.txt pyinstaller
 # iconutil 是 macOS 自带的：把 iconset 转成 PyInstaller 要的 .icns。
 iconutil -c icns assets/icon.iconset -o assets/icon.icns
 
+# --add-data 是给运行时图标用的：只靠 --icon 的话，.app 文件
+# 本身在 Finder 里是新图标，但运行时任务栏 / Dock 里窗口的
+# 图标仍是默认图标；把 icon.png 打进包里，main.py 才能在
+# 运行时设窗口图标。Mac/Linux 上分隔符是冒号。
 python3 -m PyInstaller \
   --clean --noconfirm \
   --windowed \
   --name MuseQuotaWidget \
   --icon assets/icon.icns \
+  --add-data "assets/icon.png:assets" \
   --osx-bundle-identifier com.levana.musequotawidget \
   main.py
 

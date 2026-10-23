@@ -38,12 +38,30 @@ if errorlevel 1 (
 )
 
 echo [2/3] Building with PyInstaller...
-if exist "assets\icon.ico" (
-  python -m PyInstaller --clean --noconfirm --windowed --name MuseQuotaWidget --icon "assets\icon.ico" main.py
-) else (
-  echo [WARNING] assets\icon.ico not found, building without a custom icon.
+REM --add-data is for the runtime window/taskbar icon: --icon alone only
+REM changes how the exe file looks in Explorer, the running window in
+REM the taskbar still shows the default icon unless main.py can load
+REM icon.png at runtime. Windows separator for --add-data is a semicolon.
+if not exist "assets\icon.ico" (
+  echo [WARNING] assets\icon.ico not found, building without a custom exe icon.
   echo           Run git pull to get the latest version, then build again.
-  python -m PyInstaller --clean --noconfirm --windowed --name MuseQuotaWidget main.py
+)
+if not exist "assets\icon.png" (
+  echo [WARNING] assets\icon.png not found, runtime taskbar icon will fall back to default.
+  echo           Run git pull to get the latest version, then build again.
+)
+if exist "assets\icon.ico" (
+  if exist "assets\icon.png" (
+    python -m PyInstaller --clean --noconfirm --windowed --name MuseQuotaWidget --icon "assets\icon.ico" --add-data "assets\icon.png;assets" main.py
+  ) else (
+    python -m PyInstaller --clean --noconfirm --windowed --name MuseQuotaWidget --icon "assets\icon.ico" main.py
+  )
+) else (
+  if exist "assets\icon.png" (
+    python -m PyInstaller --clean --noconfirm --windowed --name MuseQuotaWidget --add-data "assets\icon.png;assets" main.py
+  ) else (
+    python -m PyInstaller --clean --noconfirm --windowed --name MuseQuotaWidget main.py
+  )
 )
 if errorlevel 1 (
   echo [ERROR] PyInstaller build failed. See the output above.

@@ -182,6 +182,16 @@ class FloatingWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("")
+        # 兜底：直接建 FloatingWindow 时也设一次图标，
+        # 不经过 main.py 时任务栏 / Dock 仍显示做的那个图标。
+        try:
+            from .app_icon import load_app_icon
+
+            _icon = load_app_icon()
+            if _icon is not None:
+                self.setWindowIcon(_icon)
+        except Exception:
+            pass
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.resize(240, 180)
