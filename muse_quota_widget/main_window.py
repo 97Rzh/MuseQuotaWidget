@@ -248,6 +248,27 @@ class FloatingWindow(QWidget):
         self._morph_target = None
         self._morph_edge = None
         self._morph_switched = False
+        # 缩小形变是谁触发的：drag = 拖动松手贴边，leave = 鼠标离开完整窗体。
+        # 区分它是为了形变结束时决定要不要自动再展开：
+        # leave 触发且形变结束时鼠标又回到小条上，才自动再展开；
+        # drag 触发时鼠标本来就在小条上，绝不能自动再展开，
+        # 否则拖过去隐藏会立刻又弹回完整窗体。
+        self._morph_trigger = "drag"
+        # 上一次完整窗体的高度：小条展开形变的目标高度就用它，
+        # 因为小条宽度 96 时量不出 240 宽时的正确高度；
+        # 进小条时记下，展开时直接用它，结束时再按实际内容定型一次。
+        self._last_full_height = None
+        # 展开形变（小条 -> 中等窗）：跟缩小形变同款参数、反向，
+        # 600ms、30 步、easeInOut、透明度先跌到 0.2 再亮回 1.0，
+        # 中途换内容，结束时才真正定在中等窗上，不再直接弹开。
+        self._reveal_morph_timer = None
+        self._reveal_morph_step = 0
+        self._reveal_morph_total = 30
+        self._reveal_morph_start = None
+        self._reveal_morph_target = None
+        self._reveal_morph_edge = None
+        self._reveal_morph_switched = False
+        self._reveal_morphing = False
         # 设置展开/收起形变：跟边缘隐藏缩小同款，600ms、30 步、
         # easeInOut、透明度先跌到 0.2 再亮回 1.0，中途换内容。
         self._settings_morph_timer = None
@@ -409,8 +430,15 @@ class FloatingWindow(QWidget):
         spacer(16)
         section("账号")
         spacer(6)
+        # 账号信息暂时不显示（2026-10-23 Ren 定：获取不到就先不显示）：
+        # 标签建出来但始终隐藏，登录状态只靠下面登录/退出按钮二选一
+        # 来表示（只显登录 = 未登录，只显退出 = 已登录），不写
+        # “当前账号：…”也不写“未登录”。以后要恢复时，把
+        # _update_login_status 里那句 setVisible(False) 拿掉即可，
+        # 取账号的逻辑（session.account）还留着没删。
         self.login_status_label = QLabel("未登录")
         self.login_status_label.setWordWrap(True)
+        self.login_status_label.setVisible(False)
         self.login_status_label.setStyleSheet(f"color: {SECONDARY_TEXT}; font-size: 13px;")
         settings_layout.addWidget(self.login_status_label)
         spacer(8)
@@ -533,18 +561,30 @@ class FloatingWindow(QWidget):
     # ---- 齿轮与拖动 ----
 
     def enterEvent(self, event):  # noqa: N802
-        # 小条状态下划过小条就展开成完整窗体；完整窗体下只显示齿轮。
+        # 小条状态下划过小条就展开：不再直接弹开，走跟缩小形变同款、
+        # 反向的 600ms 展开形变（位置/尺寸插值、透明度跌到 0.2 再亮回、
+        # 中途换中等窗内容）。形变进行中不重复触发，齿轮在形变结束
+        # 时才显示，形变中途不提前露出来。
         if self._is_bar:
-            self._reveal_from_bar()
+            if not self._suction_animating and not self._settings_morphing and not self._reveal_morphing:
+                self._start_reveal_morph(self._hidden_edge)
+            super().enterEvent(event)
+            return
         self.gear_button.setVisible(True)
         super().enterEvent(event)
 
     def leaveEvent(self, event):  # noqa: N802
         self.gear_button.setVisible(False)
-        # 隐藏体系里、完整窗体状态下，鼠标离开整个窗体就变回小条。
-        # 正在拖动时不变回，否则拖动中窗体一动就被藏起来。
+        # 隐藏体系里、完整窗体状态下，鼠标离开整个窗体就变回小条，
+        # 也不再直接弹回：走跟拖动隐藏相同的缩小形变。
+        # 正在拖动时不变回，否则拖动中窗体一动就被藏起来；
+        # 形变进行中不重复触发，展开形变结束时会自己判鼠标还在不在，
+        # 不在就自动再进缩小形变，不用这里抢。
+        if self._suction_animating or self._settings_morphing or self._reveal_morphing:
+            super().leaveEvent(event)
+            return
         if self._hidden_edge is not None and not self._is_bar and self._drag_pos is None:
-            self._hide_to_bar()
+            self._start_suck_in(self._hidden_edge, trigger="leave")
         super().leaveEvent(event)
 
     def resizeEvent(self, event):  # noqa: N802
@@ -658,7 +698,7 @@ class FloatingWindow(QWidget):
         避免两个形变打架。设置展开时拖动到边缘松手也能隐藏：
         松手贴边就进缩小形变，定在小条上，不贴边则保持展开。
         """
-        if self._settings_morphing or self._suction_animating:
+        if self._settings_morphing or self._suction_animating or self._reveal_morphing:
             return
         expanding = not self._is_settings_expanded
         start_x, start_y = self.x(), self.y()
@@ -673,6 +713,12 @@ class FloatingWindow(QWidget):
         if to_bar:
             # 收起 + 原来是小条来的：形变目标直接是小条，不是完整窗体，
             # 一次形变就从大窗回到小条，不用先回完整窗体再二次缩小。
+            # 先量一次完整高度存起来，供以后小条展开当目标高度用，
+            # 否则展开会误用展开后的大窗高度。
+            try:
+                self._last_full_height = self._measure_settings_height(False)
+            except Exception:
+                pass
             bar_x, bar_y = self._bar_position(self._settings_return_edge, start_x, start_y)
             target_x, target_y, target_w, target_h = bar_x, bar_y, self._bar_width, self._bar_height
         else:
@@ -934,7 +980,7 @@ class FloatingWindow(QWidget):
         边缘动画已按 Ren 要求删掉：拖动时不再显示任何边带，
         只有松手贴边时才进下面的缩小形变过渡。
         形变进行中不响应新的拖动，避免形变被打断。"""
-        if self._suction_animating or self._settings_morphing:
+        if self._suction_animating or self._settings_morphing or self._reveal_morphing:
             return self.x(), self.y()
         raw_x = global_point.x() - self._drag_pos.x()
         raw_y = global_point.y() - self._drag_pos.y()
@@ -950,7 +996,7 @@ class FloatingWindow(QWidget):
         self._drag_moved = False
         if not moved:
             return
-        if self._suction_animating or self._settings_morphing:
+        if self._suction_animating or self._settings_morphing or self._reveal_morphing:
             return
         if self._is_settings_expanded:
             # 设置展开时拖动也要能隐藏：拖到边缘松手就进缩小形变，
@@ -977,7 +1023,7 @@ class FloatingWindow(QWidget):
         if edge is not None:
             self._start_suck_in(edge)
 
-    def _start_suck_in(self, edge: str) -> None:
+    def _start_suck_in(self, edge: str, trigger: str = "drag") -> None:
         """松手缩小形变：600ms 内从完整窗体滑向边、缩小成小条。
 
         每 20ms 走一步，位置和尺寸按 easeInOut 从完整窗体
@@ -987,12 +1033,20 @@ class FloatingWindow(QWidget):
         被边吸着变形、最后定成小条，而不是跳变。
         定时器带 parent，窗体关掉时跟着没，不会在已关
         的窗体上再跑形变。"""
-        if self._suction_animating:
+        if self._suction_animating or self._reveal_morphing or self._settings_morphing:
             return
         self._suction_animating = True
+        self._morph_trigger = trigger
         self.gear_button.setVisible(False)
         start_x, start_y = self.x(), self.y()
         start_w, start_h = self.width(), self.height()
+        if self._is_settings_expanded:
+            try:
+                self._last_full_height = self._measure_settings_height(False)
+            except Exception:
+                pass
+        else:
+            self._last_full_height = start_h
         bar_x, bar_y = self._bar_position(edge, start_x, start_y)
         self._morph_start = (start_x, start_y, start_w, start_h)
         self._morph_target = (bar_x, bar_y, self._bar_width, self._bar_height)
@@ -1078,6 +1132,14 @@ class FloatingWindow(QWidget):
             self.move(bx2, by2)
             self._sync_bar_label()
             diagnostics.log(f"edge hidden to bar: edge={edge} (morphed)")
+            if self._morph_trigger == "leave":
+                try:
+                    from PySide6.QtGui import QCursor as _QCursor
+
+                    if self.geometry().contains(_QCursor.pos()):
+                        self._start_reveal_morph(edge)
+                except Exception:
+                    pass
 
     def _bar_position(self, edge: str, ref_x: int, ref_y: int):
         """小条在边上的左上角：完全在屏内，贴着边。
@@ -1103,6 +1165,7 @@ class FloatingWindow(QWidget):
         也无设置块，成了第四种状态。清掉后小条展开必回中等窗。
         """
         ref_x, ref_y = self.x(), self.y()
+        self._last_full_height = self.height()
         self._hidden_edge = edge
         self._is_bar = True
         self._is_settings_expanded = False
@@ -1123,52 +1186,142 @@ class FloatingWindow(QWidget):
         diagnostics.log(f"edge hidden to bar: edge={edge}")
 
     def _reveal_from_bar(self) -> None:
-        """小条 -> 中等窗：仍在隐藏体系里，鼠标离开后会变回小条。
+        """小条 -> 中等窗：只做形变入口，真正展开走 _start_reveal_morph。
 
-        必恢复中等窗内容：清设置展开标志、顶块回完整（% + 条 +
-        节奏 + 重置时间），否则设置展开时进小条留下的顶块状态
-        会直接漏到这里，变成只有 % + 条的第四种状态。
-        节奏按上次快照恢复一次，高度按恢复后的内容量。
+        仍在隐藏体系里，鼠标离开后会变回小条（离开时走缩小形变）。
         """
         if self._hidden_edge is None:
             return
-        edge = self._hidden_edge
-        bar_x, bar_y = self.x(), self.y()
-        self._is_bar = False
-        self._is_settings_expanded = False
-        self.bar_label.setVisible(False)
-        self.settings_widget.setVisible(False)
-        self._divider_widget.setVisible(False)
-        self.quota_widget.setVisible(True)
-        self._set_quota_mini(False)
-        if self._last_good is not None:
-            self._show_pace(self._last_good, max(0.0, min(100.0, self._last_good.remaining)))
-        self._card_layout.setContentsMargins(16, 14, 16, 12)
-        self.setFixedWidth(240)
-        self.updateGeometry()
-        QApplication.processEvents()
-        height = self.sizeHint().height()
-        height = max(height, self.quota_widget.sizeHint().height() + 30)
+        self._start_reveal_morph(self._hidden_edge)
+
+    def _start_reveal_morph(self, edge: str) -> None:
+        """展开形变：小条 -> 中等窗，缩小形变的反向、同款动画。
+
+        600ms、30 步、easeInOut、透明度先跌到 0.2 再亮回 1.0，
+        中途在最暗处换成中等窗内容（藏小条标签、显额度区、
+        顶块回完整 % + 条 + 节奏 + 重置时间），而不是直接弹开。
+        目标高度用进小条时记下的完整高度（小条宽度下量不准），
+        结束时再按实际内容定型一次、钳制回屏内。
+        形变结束时若鼠标已不在窗内，自动再进缩小形变，
+        不用用户先移出再移入才触发离开隐藏。
+        """
+        if edge is None:
+            return
+        if self._reveal_morphing or self._suction_animating or self._settings_morphing:
+            return
+        if not self._is_bar:
+            return
+        start_x, start_y = self.x(), self.y()
+        start_w, start_h = self.width(), self.height()
+        height = self._last_full_height or 180
+        height = max(100, min(600, int(height)))
         geom = self._screen_geometry()
         if geom is None:
-            self.resize(240, height)
-            return
-        if edge == "left":
-            x, y = geom.x(), max(geom.y(), min(bar_y, geom.y() + geom.height() - height))
+            target_x, target_y = start_x, start_y
+        elif edge == "left":
+            target_x, target_y = geom.x(), max(geom.y(), min(start_y, geom.y() + geom.height() - height))
         elif edge == "right":
-            x, y = geom.x() + geom.width() - 240, max(geom.y(), min(bar_y, geom.y() + geom.height() - height))
+            target_x, target_y = geom.x() + geom.width() - 240, max(geom.y(), min(start_y, geom.y() + geom.height() - height))
         elif edge == "top":
-            x, y = max(geom.x(), min(bar_x, geom.x() + geom.width() - 240)), geom.y()
+            target_x, target_y = max(geom.x(), min(start_x, geom.x() + geom.width() - 240)), geom.y()
         else:
-            x, y = max(geom.x(), min(bar_x, geom.x() + geom.width() - 240)), geom.y() + geom.height() - height
-        self.resize(240, height)
+            target_x, target_y = max(geom.x(), min(start_x, geom.x() + geom.width() - 240)), geom.y() + geom.height() - height
+        self._reveal_morphing = True
+        self._reveal_morph_edge = edge
+        self._reveal_morph_start = (start_x, start_y, start_w, start_h)
+        self._reveal_morph_target = (target_x, target_y, 240, height)
+        self._reveal_morph_step = 0
+        self._reveal_morph_switched = False
+        self.gear_button.setVisible(False)
+        self.setMinimumWidth(0)
+        self.setMaximumWidth(16777215)
+        self.setFixedSize(start_w, start_h)
+        timer = QTimer(self)
+        timer.setInterval(20)
+        timer.timeout.connect(self._on_reveal_morph_tick)
+        self._reveal_morph_timer = timer
+        timer.start()
+
+    def _on_reveal_morph_tick(self) -> None:
+        if self._reveal_morph_start is None or self._reveal_morph_target is None:
+            return
+        self._reveal_morph_step += 1
+        total = self._reveal_morph_total
+        t = min(1.0, self._reveal_morph_step / total)
+        eased = 4 * t * t * t if t < 0.5 else 1 - ((-2 * t + 2) ** 3) / 2
+        sx, sy, sw, sh = self._reveal_morph_start
+        bx, by, bw, bh = self._reveal_morph_target
+        x = int(sx + (bx - sx) * eased)
+        y = int(sy + (by - sy) * eased)
+        w = int(sw + (bw - sw) * eased)
+        h = int(sh + (bh - sh) * eased)
+        opacity = 1.0 - 0.8 * math.sin(math.pi * t)
+        self.setWindowOpacity(opacity)
+        self.setFixedSize(max(20, w), max(20, h))
         self.move(x, y)
+        if t >= 0.5 and not self._reveal_morph_switched:
+            self._reveal_morph_switched = True
+            self._is_bar = False
+            self._is_settings_expanded = False
+            self.bar_label.setVisible(False)
+            self.settings_widget.setVisible(False)
+            self._divider_widget.setVisible(False)
+            self.quota_widget.setVisible(True)
+            self._set_quota_mini(False)
+            if self._last_good is not None:
+                self._show_pace(self._last_good, max(0.0, min(100.0, self._last_good.remaining)))
+            self._card_layout.setContentsMargins(16, 14, 16, 12)
+        if t >= 1.0:
+            edge = self._reveal_morph_edge
+            if self._reveal_morph_timer is not None:
+                self._reveal_morph_timer.stop()
+            self._reveal_morph_timer = None
+            self._reveal_morph_start = None
+            self._reveal_morph_target = None
+            self._reveal_morph_edge = None
+            self._reveal_morphing = False
+            self.setWindowOpacity(1.0)
+            if not self._reveal_morph_switched:
+                self._is_bar = False
+                self._is_settings_expanded = False
+                self.bar_label.setVisible(False)
+                self.settings_widget.setVisible(False)
+                self._divider_widget.setVisible(False)
+                self.quota_widget.setVisible(True)
+                self._set_quota_mini(False)
+                if self._last_good is not None:
+                    self._show_pace(self._last_good, max(0.0, min(100.0, self._last_good.remaining)))
+                self._card_layout.setContentsMargins(16, 14, 16, 12)
+            self.setMinimumWidth(0)
+            self.setMaximumWidth(16777215)
+            self.setMinimumHeight(0)
+            self.setMaximumHeight(16777215)
+            self.setFixedWidth(240)
+            self.updateGeometry()
+            QApplication.processEvents()
+            final_h = self.sizeHint().height()
+            final_h = max(final_h, self.quota_widget.sizeHint().height() + 30)
+            nx, ny = self._clamp_position(self.x(), self.y(), 240, final_h)
+            self.resize(240, final_h)
+            self.move(nx, ny)
+            self._last_full_height = final_h
+            self.gear_button.setVisible(True)
+            self.gear_button.move(self.width() - 16 - 28, 14)
+            diagnostics.log(f"bar revealed: edge={edge} (morphed)")
+            try:
+                from PySide6.QtGui import QCursor as _QCursor
+
+                if not self.geometry().contains(_QCursor.pos()):
+                    if self._hidden_edge is not None and self._drag_pos is None:
+                        self._start_suck_in(self._hidden_edge, trigger="leave")
+            except Exception:
+                pass
 
     def _hide_to_bar(self) -> None:
-        """完整窗体（隐藏体系里）-> 小条：鼠标离开完整窗体时调。"""
+        """完整窗体（隐藏体系里）-> 小条：走缩小形变，不再直接切换。"""
         if self._hidden_edge is None:
             return
-        self._enter_bar_mode(self._hidden_edge)
+        self._start_suck_in(self._hidden_edge, trigger="leave")
 
     def _cancel_bar_mode(self, x: int, y: int) -> None:
         """小条 -> 普通中等窗：拖离边缘后取消隐藏，不再自动变回小条。"""
@@ -1248,25 +1401,10 @@ class FloatingWindow(QWidget):
 
     def _update_login_status(self) -> None:
         logged_in = self._session.has_token
-        # 登录 / 退出只显示其中一个：未登录只显登录，已登录只显退出。
-        # 当前账号显示真实账号，不再显示“已登录”占位：
-        # 账号来自 auth/check 或订阅响应里的邮箱/用户名/姓名字段，
-        # 或令牌 JWT 里的 email/name，只存内存、不记日志、不写盘；
-        # viewer_id 是内部 id，从不显示。取不到时不编一个邮箱出来，
-        # 也不回退到“已登录”，而是明说未获取到账号信息（黄色），
-        # 重新验证登录后若仍是这句，说明响应里确实没有账号字段，
-        # 看诊断日志里 auth: 那行的 accountField 和 payload 字段名
-        # 就能知道该加哪个键。未登录时显示“未登录”。
-        if not logged_in:
-            self.login_status_label.setText("未登录")
-            color = SECONDARY_TEXT
-        elif self._session.account:
-            self.login_status_label.setText(f"当前账号：{self._session.account}")
-            color = "#4ADE80"
-        else:
-            self.login_status_label.setText("当前账号：未获取到账号信息")
-            color = "#FBBF24"
-        self.login_status_label.setStyleSheet(f"color: {color}; font-size: 13px;")
+        # 账号信息暂时不显示（2026-10-23 Ren 定）：标签始终隐藏，
+        # 不写“当前账号：…”也不写“未登录”。登录状态只靠按钮二选一：
+        # 未登录只显登录，已登录只显退出。
+        self.login_status_label.setVisible(False)
         self.login_button.setVisible(not logged_in)
         self.logout_button.setVisible(logged_in)
 
@@ -1448,6 +1586,6 @@ class FloatingWindow(QWidget):
         # 节奏文案换成两行，窗体高度要跟着长一截，否则第二行
         # 还是会被裁；小条、设置展开、形变中不调，免得把小条
         # 撑回完整窗体或把设置面板高度打乱。
-        if not self._is_bar and not self._is_settings_expanded and not self._suction_animating and not self._settings_morphing:
+        if not self._is_bar and not self._is_settings_expanded and not self._suction_animating and not self._settings_morphing and not self._reveal_morphing:
             self.updateGeometry()
             self.adjustSize()
