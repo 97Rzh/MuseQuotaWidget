@@ -253,6 +253,13 @@ class FloatingWindow(QWidget):
         self._settings_morph_expanding = False
         self._settings_morph_switched = False
         self._settings_morphing = False
+        # 设置从小条展开而来时记下的原隐藏边：小条划过展开成完整窗体
+        # （_hidden_edge 仍在）再点齿轮展开设置，记下这条边；
+        # 收起设置时若它还在，就直接回到小条，而不是停在完整窗体。
+        # 不是从小条来的（正常完整窗体点齿轮）时它是 None，收起就回完整窗体。
+        self._settings_return_edge = None
+        # 本次设置形变是不是直接到小条（收起 + 原来是小条来的）。
+        self._settings_morph_to_bar = False
         self._background_login = None
         self._fetch_thread = None
         self._fetch_worker = None
@@ -639,29 +646,46 @@ class FloatingWindow(QWidget):
         不再瞬间改宽：600ms、30 步、easeInOut、透明度先跌到 0.2
         再亮回 1.0，中途换内容。宽度始终 240（上下结构，不再变 528），
         只有高度在变：展开时变高（上方顶块 + 细线 + 设置块），
-        收起时变回完整窗体高度。形变进行中再点齿轮直接返回，
-        避免两个形变打架。
+        收起时变回完整窗体高度；收起时若原来是小条来的，
+        形变目标直接是小条，一次形变就从大窗回到小条，
+        不用先回完整窗体再二次缩小。形变进行中再点齿轮直接返回，
+        避免两个形变打架。设置展开时拖动到边缘松手也能隐藏：
+        松手贴边就进缩小形变，定在小条上，不贴边则保持展开。
         """
         if self._settings_morphing or self._suction_animating:
             return
         expanding = not self._is_settings_expanded
         start_x, start_y = self.x(), self.y()
         start_w, start_h = self.width(), self.height()
-        # 目标高度：先量目标状态的高度，再切回当前状态开始形变。
-        target_h = self._measure_settings_height(expanding)
-        target_w = 240
-        # 目标位置：宽度不变，高度变后若超出屏底就往上挪，
-        # 保证展开后的大窗完整在屏内，形变时位置也平滑过去。
-        geom = self._screen_geometry()
-        target_x, target_y = start_x, start_y
-        if geom is not None:
-            target_x = max(geom.x(), min(start_x, geom.x() + geom.width() - target_w))
-            if target_h <= geom.height():
-                target_y = max(geom.y(), min(start_y, geom.y() + geom.height() - target_h))
-            else:
-                target_y = geom.y()
+        # 展开时记下原隐藏边：小条划过展开成完整窗体时 _hidden_edge 还在，
+        # 点齿轮展开设置前先记下来，收起时才能回到小条；
+        # 正常完整窗体点齿轮时 _hidden_edge 是 None，记下来就是 None，
+        # 收起时回完整窗体。收起时不覆盖它，用展开时记下的那条边。
+        if expanding:
+            self._settings_return_edge = self._hidden_edge
+        to_bar = (not expanding) and (self._settings_return_edge is not None)
+        if to_bar:
+            # 收起 + 原来是小条来的：形变目标直接是小条，不是完整窗体，
+            # 一次形变就从大窗回到小条，不用先回完整窗体再二次缩小。
+            bar_x, bar_y = self._bar_position(self._settings_return_edge, start_x, start_y)
+            target_x, target_y, target_w, target_h = bar_x, bar_y, self._bar_width, self._bar_height
+        else:
+            # 目标高度：先量目标状态的高度，再切回当前状态开始形变。
+            target_h = self._measure_settings_height(expanding)
+            target_w = 240
+            # 目标位置：宽度不变，高度变后若超出屏底就往上挪，
+            # 保证展开后的大窗完整在屏内，形变时位置也平滑过去。
+            geom = self._screen_geometry()
+            target_x, target_y = start_x, start_y
+            if geom is not None:
+                target_x = max(geom.x(), min(start_x, geom.x() + geom.width() - target_w))
+                if target_h <= geom.height():
+                    target_y = max(geom.y(), min(start_y, geom.y() + geom.height() - target_h))
+                else:
+                    target_y = geom.y()
         self._settings_morphing = True
         self._settings_morph_expanding = expanding
+        self._settings_morph_to_bar = to_bar
         self._settings_morph_start = (start_x, start_y, start_w, start_h)
         self._settings_morph_target = (target_x, target_y, target_w, target_h)
         self._settings_morph_step = 0
@@ -697,16 +721,56 @@ class FloatingWindow(QWidget):
             self._settings_morph_switched = True
             # 中途换内容：换内容的那一下被最暗处盖住，看起来就是
             # 窗体在变大/变小的同时内容也跟着变，而不是跳变。
-            self._apply_settings_content(self._settings_morph_expanding)
+            if self._settings_morph_to_bar:
+                # 直接到小条：中途换成小条内容（藏额度区和设置块，
+                # 显小条标签，卡片边距改小条边距），不是换成完整窗体。
+                self._is_settings_expanded = False
+                self._divider_widget.setVisible(False)
+                self.settings_widget.setVisible(False)
+                self.quota_widget.setVisible(False)
+                self.bar_label.setVisible(True)
+                self._card_layout.setContentsMargins(8, 6, 8, 6)
+                self._sync_bar_label()
+            else:
+                self._apply_settings_content(self._settings_morph_expanding)
         if t >= 1.0:
             expanding = self._settings_morph_expanding
+            to_bar = self._settings_morph_to_bar
+            return_edge = self._settings_return_edge
             if self._settings_morph_timer is not None:
                 self._settings_morph_timer.stop()
             self._settings_morph_timer = None
             self._settings_morph_start = None
             self._settings_morph_target = None
             self._settings_morphing = False
+            self._settings_morph_to_bar = False
             self.setWindowOpacity(1.0)
+            if to_bar:
+                # 直接到小条定型：跟边缘隐藏缩小同款定型，
+                # 万一中途没换，这里补一次，不会再跳。
+                if not self._settings_morph_switched:
+                    self._is_settings_expanded = False
+                    self._divider_widget.setVisible(False)
+                    self.settings_widget.setVisible(False)
+                    self.quota_widget.setVisible(False)
+                    self.bar_label.setVisible(True)
+                    self._card_layout.setContentsMargins(8, 6, 8, 6)
+                    self._sync_bar_label()
+                self._hidden_edge = return_edge
+                self._is_bar = True
+                self._settings_return_edge = None
+                self.gear_button.setVisible(False)
+                self.setMinimumWidth(0)
+                self.setMaximumWidth(16777215)
+                self.setMinimumHeight(0)
+                self.setMaximumHeight(16777215)
+                self.setFixedWidth(self._bar_width)
+                bx2, by2 = self._bar_position(return_edge, x, y) if return_edge is not None else (x, y)
+                self.resize(self._bar_width, self._bar_height)
+                self.move(bx2, by2)
+                self._sync_bar_label()
+                diagnostics.log(f"settings toggled: expanded=False to bar edge={return_edge}")
+                return
             if not self._settings_morph_switched:
                 self._apply_settings_content(expanding)
             # 结束时放开高度、只固定宽度 240，定在目标尺寸和位置。
@@ -861,7 +925,7 @@ class FloatingWindow(QWidget):
         边缘动画已按 Ren 要求删掉：拖动时不再显示任何边带，
         只有松手贴边时才进下面的缩小形变过渡。
         形变进行中不响应新的拖动，避免形变被打断。"""
-        if self._suction_animating:
+        if self._suction_animating or self._settings_morphing:
             return self.x(), self.y()
         raw_x = global_point.x() - self._drag_pos.x()
         raw_y = global_point.y() - self._drag_pos.y()
@@ -877,9 +941,16 @@ class FloatingWindow(QWidget):
         self._drag_moved = False
         if not moved:
             return
-        if self._suction_animating:
+        if self._suction_animating or self._settings_morphing:
             return
         if self._is_settings_expanded:
+            # 设置展开时拖动也要能隐藏：拖到边缘松手就进缩小形变，
+            # 形变中途会藏掉设置块和细线、定在小条上；
+            # 没拖到边缘就什么都不做，设置保持展开，不会因为松手就收起。
+            edge = self._edge_at(self.x(), self.y(), self.width(), self.height())
+            if edge is not None:
+                self._settings_return_edge = None
+                self._start_suck_in(edge)
             return
         if self._is_bar:
             # 小条在拖：松手时还在边上就留在边上（边可能换了，
