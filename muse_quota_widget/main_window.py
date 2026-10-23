@@ -8,8 +8,11 @@
 再点齿轮或面板里的“完成”可收回。
 
 边缘隐藏（取代旧的双击停靠 + 8px 线）：
-- 窗体永远拖不出屏幕：拖动全程按当前屏幕可视区域钳制，
-  拖到边就停在边上，不会一半滑到屏幕外。
+- 窗体永远拖不出屏幕：拖动全程按所有屏的虚拟外框钳制，
+  且至少交叠一屏，双屏之间可以自由拖过去，不会一半滑到
+  屏幕外、也不会拖进高低错开的屏上方死角回不来；
+  屏间交界不算边，拖过交界不会触发吸入 / 隐藏，
+  只有拖到某屏真正的上 / 下 / 最左 / 最右外边才会触发。
 - 拖到边缘松手就自动隐藏：不再需要双击，松手时窗体
   只要贴着边（5px 内），就变成贴在边上的一条 96x48 小条，
   条里只显示剩余额度（跟主窗同色，绿 / 黄 / 红随剩余额度变）。
@@ -43,7 +46,7 @@ import sys
 from datetime import datetime
 from typing import Optional
 
-from PySide6.QtCore import QEvent, QObject, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
@@ -773,53 +776,145 @@ class FloatingWindow(QWidget):
 
     # ---- 边缘隐藏：拖不出屏 + 拖到边缘松手变小条 ----
 
+    # ---- 多屏：之前这里只用 self.screen() 的单屏可视区钳制，
+    # 双屏下窗体被钉在当前屏、拖不过屏间交界，这就是这次报的 bug。
+    # 新逻辑：钳制用所有屏的虚拟外框 + 至少交叠一屏；
+    # 边缘只认真实外边，屏间交界（边外一点仍在另一屏里）不算边，
+    # 所以拖过交界不会触发吸入 / 隐藏，拖到某屏真正的上 / 下 /
+    # 最左 / 最右外边才会触发，小条也定在窗体所在的那块屏上。
+
+    def _available_geometries(self):
+        """所有屏的 availableGeometry：排除各屏菜单栏 / Dock 的可见区。"""
+        try:
+            geoms = [s.availableGeometry() for s in QApplication.screens()]
+        except Exception:
+            geoms = []
+        if not geoms:
+            primary = QApplication.primaryScreen()
+            if primary is not None:
+                geoms = [primary.availableGeometry()]
+        return geoms
+
+    def _virtual_geometry(self):
+        """所有屏的外框：左 = 最左屏的左，上 = 最上屏的上，依此类推。"""
+        geoms = self._available_geometries()
+        if not geoms:
+            return None
+        left = min(g.x() for g in geoms)
+        top = min(g.y() for g in geoms)
+        right = max(g.x() + g.width() for g in geoms)
+        bottom = max(g.y() + g.height() for g in geoms)
+        return QRect(left, top, right - left, bottom - top)
+
+    def _screen_containing_window(self, x: int, y: int, w: int, h: int):
+        """窗体中心所在的屏；中心落在屏间死角（比如高低错开的屏
+        上方）时退到离中心最近的那块屏，不会返回 None。"""
+        geoms = self._available_geometries()
+        if not geoms:
+            return None
+        cx, cy = x + w // 2, y + h // 2
+        for g in geoms:
+            if g.contains(QPoint(cx, cy)):
+                return g
+        # 死角：找离中心最近的屏（矩形到点的距离，不是中心到中心，
+        # 否则大屏和小屏的中心距离会误判）。
+        def _dist_to_rect(g):
+            dx = max(g.x() - cx, 0, cx - (g.x() + g.width()))
+            dy = max(g.y() - cy, 0, cy - (g.y() + g.height()))
+            return dx * dx + dy * dy
+
+        return min(geoms, key=_dist_to_rect)
+
     def _screen_geometry(self):
+        """窗体当前所在屏的可视区：小条 / 吸入带 / 展开位置都按这块屏算，
+        不是按虚拟外框算，否则错开的屏上小条会定在死角里看不见。"""
+        geom = self._screen_containing_window(self.x(), self.y(), self.width(), self.height())
+        if geom is not None:
+            return geom
         screen = self.screen()
         if screen is None:
             screen = QApplication.primaryScreen()
         if screen is None:
             return None
-        # availableGeometry 排除菜单栏 / Dock，占的是真正能看见的区域，
-        # 钳制到这里窗体才不会被系统栏盖住一半。
         return screen.availableGeometry()
 
     def _clamp_position(self, x: int, y: int, w: int = None, h: int = None):
-        """把左上角钳制在屏内：窗体永远完整在屏内，拖不出边。"""
-        geom = self._screen_geometry()
-        if geom is None:
-            return x, y
+        """钳制到虚拟外框，且窗体至少交叠一屏：
+
+        先按虚拟外框钳制，这样双屏之间可以自由拖过去；
+        钳制完若窗体跟所有屏都不交叠（比如拖进了高低错开的
+        屏上方死角），再把窗体压回离它最近的那块屏里，
+        不会让窗体拖到看不见的地方回不来。单屏时虚拟外框
+        就是那块屏，跟以前行为完全一致。"""
         w = self.width() if w is None else w
         h = self.height() if h is None else h
-        x = max(geom.x(), min(x, geom.x() + geom.width() - w))
-        y = max(geom.y(), min(y, geom.y() + geom.height() - h))
+        virt = self._virtual_geometry()
+        if virt is None:
+            return x, y
+        x = max(virt.x(), min(x, virt.x() + virt.width() - w))
+        y = max(virt.y(), min(y, virt.y() + virt.height() - h))
+        rect = QRect(x, y, w, h)
+        geoms = self._available_geometries()
+        if any(g.intersects(rect) for g in geoms):
+            return x, y
+        # 死角：压回最近屏的可视区。
+        nearest = self._screen_containing_window(x, y, w, h)
+        if nearest is None:
+            return x, y
+        x = max(nearest.x(), min(x, nearest.x() + nearest.width() - w))
+        y = max(nearest.y(), min(y, nearest.y() + nearest.height() - h))
         return x, y
 
+    def _is_real_edge(self, edge: str, x: int, y: int, w: int, h: int, geom) -> bool:
+        """这条边是不是真实外边：边外一点（窗体沿边中点处）
+        若仍在任一屏里，说明是屏间交界，不是外边。"""
+        if edge == "left":
+            point = QPoint(x - 1, y + h // 2)
+        elif edge == "right":
+            point = QPoint(x + w, y + h // 2)
+        elif edge == "top":
+            point = QPoint(x + w // 2, y - 1)
+        else:
+            point = QPoint(x + w // 2, y + h)
+        return not any(g.contains(point) for g in self._available_geometries())
+
     def _edge_at(self, x: int, y: int, w: int, h: int):
-        """窗体贴着哪条边（5px 内算贴着），否则返回 None。"""
-        geom = self._screen_geometry()
+        """窗体贴着哪条真实外边（5px 内算贴着），否则返回 None。
+        屏间交界即使贴着也不算，不会拖过交界就变小条。"""
+        geom = self._screen_containing_window(x, y, w, h)
         if geom is None:
             return None
+        candidates = []
         if abs(x - geom.x()) <= self._edge_threshold:
-            return "left"
+            candidates.append(("left", abs(x - geom.x())))
         if abs((geom.x() + geom.width()) - (x + w)) <= self._edge_threshold:
-            return "right"
+            candidates.append(("right", abs((geom.x() + geom.width()) - (x + w))))
         if abs(y - geom.y()) <= self._edge_threshold:
-            return "top"
+            candidates.append(("top", abs(y - geom.y())))
         if abs((geom.y() + geom.height()) - (y + h)) <= self._edge_threshold:
-            return "bottom"
-        return None
+            candidates.append(("bottom", abs((geom.y() + geom.height()) - (y + h))))
+        real = [(e, d) for e, d in candidates if self._is_real_edge(e, x, y, w, h, geom)]
+        if not real:
+            return None
+        return min(real, key=lambda item: item[1])[0]
 
     def _nearest_edge_distance(self, x: int, y: int, w: int, h: int):
-        """到四条边里最近的那条边和距离，屏外算 0（已被钳制不会屏外）。"""
-        geom = self._screen_geometry()
+        """到最近的真实外边的距离：只算窗体所在屏的真实外边，
+        屏间交界不参与，拖过交界时吸入带不会误出。"""
+        geom = self._screen_containing_window(x, y, w, h)
         if geom is None:
             return None, None
-        dists = (
+        dists = []
+        for edge, dist in (
             ("left", max(0, x - geom.x())),
             ("right", max(0, (geom.x() + geom.width()) - (x + w))),
             ("top", max(0, y - geom.y())),
             ("bottom", max(0, (geom.y() + geom.height()) - (y + h))),
-        )
+        ):
+            if self._is_real_edge(edge, x, y, w, h, geom):
+                dists.append((edge, dist))
+        if not dists:
+            return None, None
         return min(dists, key=lambda item: item[1])
 
     def _drag_full_move(self, global_point):
