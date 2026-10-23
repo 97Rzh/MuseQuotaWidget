@@ -279,6 +279,7 @@ class FloatingWindow(QWidget):
         self._settings_morph_expanding = False
         self._settings_morph_switched = False
         self._settings_morphing = False
+        self._settings_morph_fixed_h = None
         # 设置从小条展开而来时记下的原隐藏边：小条划过展开成完整窗体
         # （_hidden_edge 仍在）再点齿轮展开设置，记下这条边；
         # 收起设置时若它还在，就直接回到小条，而不是停在完整窗体。
@@ -690,21 +691,22 @@ class FloatingWindow(QWidget):
         return height
 
     def _toggle_settings(self) -> None:
-        """点齿轮展开/收起设置：高度先行、内容后换，不压扁内容。
+        """点齿轮展开/收起设置：展开用真抽屉，收起保持原样。
 
-        上一版抽屉式是错的：展开时先换成设置内容、再长高，
-        收起时全程保持设置内容、再缩矮——Qt 布局不会把内容裁掉，
-        只会把内容压扁，设置在高度不够的 600ms 里全程挤在一起、
-        按钮变扁、文字重叠，视频里就是这样。正确做法是内容
-        永远只出现在高度够的窗里：展开时形变全程保持中等窗内容
-        （高度从中等长到大窗，中等内容始终够高、不压扁，
-        下面只是多出空白卡片），到结束时高度已够才换成设置内容，
-        设置一出现就是完整形态；收起时形变开始前就先换成
-        中等窗内容（高度从大窗缩到中等，中等内容始终够高、
-        不压扁，下面空白逐渐缩没），结束时不再换内容。
-        透明度全程 1.0 不变，形变中途不换内容。
-        收起到小条是例外：高度要缩到 48，任何内容都不够高，
-        仍走旧的透明度跌亮 + 中途换小条内容，靠暗处盖住压扁。
+        收起（隐藏）已经不错，不动它：开始前先换成中等窗内容，
+        再从大窗高度缩到中等高度，中等内容始终够高、不压扁，
+        下面空白逐渐缩没，结束时不再换内容。
+        展开上一版的问题是最后弹一下：先长高（下面是空白卡片）、
+        到结束时才换成设置内容，设置是突然出现的，不是长出来的。
+        真抽屉的做法是展开时开始前就换成设置内容、再长高，
+        但上一版抽屉失败的原因是布局会把高度不够的设置压扁。
+        这次补上关键一步：形变期间把设置高度固定住（固定高度 =
+        展开后的完整高度），布局就压不动它，窗体高度不够时
+        只会裁掉设置的下半部分、不会把它压扁，设置是随着
+        窗体长高从上到下露出来的，到结束时刚好全露出来，
+        结束时再放开固定高度。收起到小条是例外：高度要缩到 48，
+        任何内容都不够高，仍走旧的透明度跌亮 + 中途换小条内容。
+        透明度全程 1.0 不变，形变中途不换内容（小条除外）。
         宽度始终 240，只有高度在变。形变进行中再点齿轮直接返回。
         """
         if self._settings_morphing or self._suction_animating or self._reveal_morphing:
@@ -750,15 +752,25 @@ class FloatingWindow(QWidget):
         self._settings_morph_start = (start_x, start_y, start_w, start_h)
         self._settings_morph_target = (target_x, target_y, target_w, target_h)
         self._settings_morph_step = 0
-        # 换内容时机（关键，压扁的根因就在这里）：
-        # 展开时开始前不换，形变全程保持中等窗内容，结束时才换设置；
-        # 收起时开始前就换成中等窗内容，形变全程保持中等窗内容；
-        # 收起到小条时开始前不换，形变中途（旧逻辑）才换小条。
-        # 所以收起回中等窗时 switched 置 True（已换），
-        # 展开和收起到小条时 switched 保持 False、结束/中途才换。
-        self._settings_morph_switched = (not expanding) and not to_bar
+        # 换内容时机：
+        # 展开时开始前就换成设置内容（真抽屉），并把设置高度固定住，
+        # 布局压不动它，窗体只裁下半部分；收起回中等窗时开始前就
+        # 换成中等窗内容（原样，不动）；收起到小条时开始前不换，
+        # 形变中途（旧逻辑）才换小条。
+        # 所以展开和收起回中等窗时 switched 都置 True（已换），
+        # 只有收起到小条时 switched 保持 False、中途才换。
+        self._settings_morph_switched = not to_bar
         if self._settings_morph_switched:
-            self._apply_settings_content(False)
+            self._apply_settings_content(expanding)
+            if expanding:
+                # 固定设置高度：布局给设置分配高度时不能把它压扁，
+                # 窗体高度不够的部分由卡片裁掉，设置从上到下露出来。
+                # 高度取展开后设置本身的 sizeHint，宽度不动。
+                self.updateGeometry()
+                self._settings_morph_fixed_h = self.settings_widget.sizeHint().height()
+                self.settings_widget.setFixedHeight(self._settings_morph_fixed_h)
+            else:
+                self._settings_morph_fixed_h = None
         # 形变期间固定尺寸，布局的 sizeHint 才不会把窗体抢回内容高度；
         # 结束时再放开高度、只固定宽度 240。
         self.setFixedSize(start_w, start_h)
@@ -775,7 +787,9 @@ class FloatingWindow(QWidget):
         total = self._settings_morph_total
         t = min(1.0, self._settings_morph_step / total)
         # 非小条路径：easeInOut 只变高度/位置，透明度全程 1.0，
-        # 形变中途不换内容（展开结束时换设置，收起开始前已换中等窗）。
+        # 形变中途不换内容（展开和收起都已在开始前换好）。
+        # 展开时设置高度已固定，布局压不动它，窗体只裁下半部分；
+        # 收起时设置已隐藏，中等内容始终够高。
         # 小条路径例外：高度要缩到 48，任何内容都不够高，
         # 仍用旧的透明度跌亮 + 中途换小条内容，靠暗处盖住压扁。
         eased = 4 * t * t * t if t < 0.5 else 1 - ((-2 * t + 2) ** 3) / 2
@@ -839,15 +853,21 @@ class FloatingWindow(QWidget):
                 diagnostics.log(f"settings toggled: expanded=False to bar edge={return_edge}")
                 return
             if not self._settings_morph_switched:
-                # 结束时换内容：先把 morphing 置 True 压住 _show_pace
-                # 的 adjustSize，免得换内容那一下先把窗体缩/放到
-                # 内容高度、再被下面定型 resize 一次，造成第二跳。
+                # 只有收起到小条以外的路径走到这里时才可能没换，
+                # 补一次，免得结束时内容还停在旧状态。
                 self._settings_morphing = True
                 try:
                     self._apply_settings_content(expanding)
                 finally:
                     self._settings_morphing = False
                 self._settings_morph_switched = True
+            # 结束时放开设置固定高度：展开时固定住是为了不被压扁，
+            # 高度已到目标、设置已全露，放开后布局高度就是完整高度，
+            # 不会再跳；收起时本来就没固定，这里是空操作。
+            if self._settings_morph_fixed_h is not None:
+                self.settings_widget.setMinimumHeight(0)
+                self.settings_widget.setMaximumHeight(16777215)
+                self._settings_morph_fixed_h = None
             # 结束时放开高度、只固定宽度 240，定在目标尺寸和位置。
             # 定型高度优先用形变目标高度（量高度时已算好），不再
             # 在这里调 processEvents 重算一次，否则结束那一下会
