@@ -4,17 +4,20 @@
 
 在浏览器里同源执行一次 POST /api/auth/check（ai-quota 的做法），
 只取 outcome / access_token / viewer_id / session_binding_id /
-type / reason / status 这几个字段，不取 Cookie，不把令牌发给别处。
+type / reason / status 以及账号展示字段（email/username/display_name/
+name/phone 和嵌套 user/account/profile），不取 Cookie，
+不把令牌发给别处。账号值只存内存、不进日志。
 返回 None 表示本次未拿到新令牌，调用方按指纹决定是否复用旧令牌。
 """
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any, Optional
 
 from . import diagnostics
-from .quota_api import MuseAuthException, MuseAuthKind, MuseCredential
+from .quota_api import MuseAuthException, MuseAuthKind, MuseCredential, extract_account
 
 AUTH_JS = """
 (() => {
@@ -28,7 +31,7 @@ AUTH_JS = """
     try { json = await response.json(); } catch (e) { json = null; }
     const payload = {};
     if (json && typeof json === 'object') {
-      for (const key of ['outcome', 'access_token', 'viewer_id', 'session_binding_id', 'type', 'reason', 'status']) {
+      for (const key of ['outcome', 'access_token', 'viewer_id', 'session_binding_id', 'type', 'reason', 'status', 'email', 'user_email', 'account_email', 'username', 'user_name', 'display_name', 'name', 'phone', 'phone_number', 'user', 'account', 'profile']) {
         if (Object.prototype.hasOwnProperty.call(json, key)) payload[key] = json[key];
       }
     }
@@ -41,6 +44,31 @@ AUTH_JS = """
 """
 
 POLL_JS = "window.__museQuotaAuthResult"
+
+
+def _jwt_account(token: str) -> Optional[str]:
+    """令牌若是 JWT，试着从 payload 里取账号展示名（内存里解，不记值）。
+
+    不是 JWT（没有三个点分段、payload 不是 JSON）时直接返回 None，
+    不报错、不影响原流程。只认 email / preferred_username / name，
+    sub / user_id 这类内部 id 不算账号。
+    """
+    try:
+        parts = token.strip().split(".")
+        if len(parts) != 3:
+            return None
+        payload_b64 = parts[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode("ascii")).decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    for key in ("email", "preferred_username", "username", "display_name", "name"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip() and len(value.strip()) <= 100:
+            return value.strip()
+    return None
 
 
 def _json_kind(value: Any) -> str:
@@ -90,11 +118,21 @@ def process_auth_result(
 
     binding = payload.get("session_binding_id")
     binding_kind = _json_kind(binding)
+    # 账号字段定位用：只记取到了哪个键（或 none），不记账号值本身。
+    _account_preview = extract_account(payload)
+    _account_field = "none"
+    if _account_preview is not None:
+        for _key in ("email", "user_email", "account_email", "username", "user_name", "display_name", "name", "phone"):
+            if isinstance(payload.get(_key), str) and payload.get(_key, "").strip() == _account_preview:
+                _account_field = _key
+                break
+        else:
+            _account_field = "nested-or-jwt"
     diagnostics.log(
         f"auth: httpStatus={status} payload=[{diagnostics.describe_keys(payload)}] "
         f"outcome={get_str('outcome') or '(none)'} type={get_str('type') or '(none)'} "
         f"reason={get_str('reason') or '(none)'} hasToken={bool(get_str('access_token'))} "
-        f"bindingKind={binding_kind}"
+        f"bindingKind={binding_kind} accountField={_account_field}"
     )
 
     if status == 401:
@@ -120,11 +158,21 @@ def process_auth_result(
 
     fingerprint = MuseCredential.fingerprint_for(viewer_id, binding_str)
     token = get_str("access_token")
+    # 账号展示名来源（按优先级，内存里取，不记值）：
+    # ① auth/check 响应里的邮箱/用户名/姓名字段；② 令牌是 JWT 时的
+    # payload 里的 email/name；③ 都没有就是 None，界面不得用“已登录”冒充。
+    account = extract_account(payload)
+    if account is None and token:
+        account = _jwt_account(token)
     if token:
-        return MuseCredential(token=token, fingerprint=fingerprint)
+        return MuseCredential(token=token, fingerprint=fingerprint, account=account)
 
     # 本次没给新令牌：只有指纹与旧凭据完全一致时才复用旧令牌。
     if old_credential is not None and old_credential.fingerprint == fingerprint:
+        # 复用时若这次拿到了旧凭据没有的账号名，把账号补上去，
+        # 否则返回 None 让调用方继续用旧凭据（账号也还是旧的）。
+        if account is not None and old_credential.account != account:
+            return MuseCredential(token=old_credential.token, fingerprint=fingerprint, account=account)
         return None
 
     raise MuseAuthException(MuseAuthKind.TOKEN_UNAVAILABLE)

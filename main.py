@@ -33,6 +33,10 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     app.setApplicationName("MuseQuotaWidget")
+    # 故意不建系统托盘（QSystemTrayIcon）：启动时不出现托盘图标、
+    # 右下角也不出现托盘图标，退出只走设置面板里的“退出软件”
+    # 按钮（FloatingWindow 里调 self.close()）。全仓任何地方
+    # 都不要再加托盘，否则就违背这条定版要求。
 
     # 运行时应用图标：任务栏 / Dock / Alt-Tab 显示做的那个图标，
     # 而不是默认的 Python / PyInstaller 图标。找不到图标文件时

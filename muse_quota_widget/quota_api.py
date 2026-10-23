@@ -63,10 +63,16 @@ class MuseAuthException(Exception):
 
 @dataclass
 class MuseCredential:
-    """仅存内存的凭据。Token 与指纹成对出现，指纹变了就视为换号。"""
+    """仅存内存的凭据。Token 与指纹成对出现，指纹变了就视为换号。
+
+    account 是登录账号的展示名（邮箱/用户名/手机号，哪个字段先取到
+    就用哪个），只存内存、不写盘、不进日志、不随额度数值一起记；
+    取不到时是 None，界面不得用“已登录”冒充它。
+    """
 
     token: str
     fingerprint: str
+    account: Optional[str] = None
 
     @staticmethod
     def fingerprint_for(viewer_id: str, binding_id: Optional[str]) -> str:
@@ -86,6 +92,9 @@ class QuotaData:
     additional_tokens_left: str = ""
     additional_tokens_used_percent: float = 0.0
     updated_at: Optional[datetime] = None
+    # 订阅响应里如果带了账号字段，解码时填这里；没有就是 None，
+    # 界面仍以 MuseSession 里的 account 为准（auth/check 那边也可能给）。
+    account: Optional[str] = None
 
     @property
     def remaining(self) -> float:
@@ -134,6 +143,61 @@ def _format_tokens(balance: float) -> str:
         text = f"{balance / 100_000_000:.1f}".rstrip("0").rstrip(".")
         return f"{text}亿词元"
     return f"{balance:.0f}词元"
+
+
+# 账号展示字段的候选键：auth/check 和订阅响应里如果带了账号，
+# 大概率是这些名字之一。只认字符串值，token/id/viewer_id 一律不算账号，
+# 也不把内部 id 当账号显示。先找邮箱/用户名，再找姓名，嵌套的
+# user/account/profile/viewer 对象里也找一层。
+_ACCOUNT_KEYS = (
+    "email", "user_email", "account_email", "primary_email",
+    "username", "user_name", "account_name", "profile_name",
+    "display_name", "displayName", "name",
+    "phone", "phone_number", "mobile",
+)
+_ACCOUNT_CONTAINERS = ("user", "account", "profile", "viewer")
+
+
+def _clean_account(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > 100:
+        return None
+    # 令牌、id、URL、JSON 片段都不是账号展示名。
+    lowered = text.lower()
+    if "token" in lowered or text.startswith(("http://", "https://", "{", "[")):
+        return None
+    return text
+
+
+def extract_account(obj: Any) -> Optional[str]:
+    """从一个响应对象里取账号展示名，只返回字符串本身，不记日志。
+
+    顺序：顶层候选键 -> first+last 组合 -> 嵌套 user/account/profile
+    对象里的候选键。顶层已有邮箱/用户名时不往下找，避免把
+    嵌套里的次要名字盖过邮箱。
+    """
+    if not isinstance(obj, dict):
+        return None
+    for key in _ACCOUNT_KEYS:
+        found = _clean_account(obj.get(key))
+        if found:
+            return found
+    first = _clean_account(obj.get("first_name"))
+    last = _clean_account(obj.get("last_name"))
+    if first and last:
+        return f"{first} {last}"
+    if first:
+        return first
+    for container in _ACCOUNT_CONTAINERS:
+        inner = obj.get(container)
+        if isinstance(inner, dict):
+            for key in _ACCOUNT_KEYS:
+                found = _clean_account(inner.get(key))
+                if found:
+                    return found
+    return None
 
 
 def _parse_reset(usage: dict) -> Optional[datetime]:
@@ -225,6 +289,8 @@ def parse_quota(body: str) -> QuotaData:
         if topup_total is not None and topup_total > 0:
             data.additional_tokens_used_percent = max(0.0, min(100.0, 100 * (1 - topup_balance / topup_total)))
 
+    data.account = extract_account(root) or extract_account(container) or extract_account(usage)
+
     label = _try_get_string(root, "usage_row_label", "usageRowLabel")
     if label is None:
         label = _try_get_string(container, "usage_row_label", "usageRowLabel")
@@ -248,6 +314,13 @@ def log_quota_shape(body: str) -> None:
         state = root["usage"].get("state")
         if isinstance(state, str):
             line += f" state={state}"
+    # 账号字段定位用：只记嵌套 user/account/profile 对象的字段名，
+    # 不记任何值，账号取不到时看这行就知道该加哪个键。
+    if isinstance(root, dict):
+        for container in _ACCOUNT_CONTAINERS:
+            inner = root.get(container)
+            if isinstance(inner, dict):
+                line += f" {container}=[{diagnostics.describe_keys(inner)}]"
     diagnostics.log(line)
 
 

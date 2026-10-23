@@ -405,6 +405,7 @@ class FloatingWindow(QWidget):
         section("账号")
         spacer(6)
         self.login_status_label = QLabel("未登录")
+        self.login_status_label.setWordWrap(True)
         self.login_status_label.setStyleSheet(f"color: {SECONDARY_TEXT}; font-size: 13px;")
         settings_layout.addWidget(self.login_status_label)
         spacer(8)
@@ -1243,14 +1244,24 @@ class FloatingWindow(QWidget):
     def _update_login_status(self) -> None:
         logged_in = self._session.has_token
         # 登录 / 退出只显示其中一个：未登录只显登录，已登录只显退出。
-        # 登录成功显示当前账号：Muse 额度接口和 auth/check 只给
-        # viewer_id 指纹（不是邮箱/昵称，且不记不显示内部 id），
-        # 所以这里不编一个邮箱出来，只显示“当前账号：已登录”
-        # 作为当前账号状态；未登录时显示“未登录”。
-        self.login_status_label.setText("当前账号：已登录" if logged_in else "未登录")
-        self.login_status_label.setStyleSheet(
-            f"color: {'#4ADE80' if logged_in else SECONDARY_TEXT}; font-size: 13px;"
-        )
+        # 当前账号显示真实账号，不再显示“已登录”占位：
+        # 账号来自 auth/check 或订阅响应里的邮箱/用户名/姓名字段，
+        # 或令牌 JWT 里的 email/name，只存内存、不记日志、不写盘；
+        # viewer_id 是内部 id，从不显示。取不到时不编一个邮箱出来，
+        # 也不回退到“已登录”，而是明说未获取到账号信息（黄色），
+        # 重新验证登录后若仍是这句，说明响应里确实没有账号字段，
+        # 看诊断日志里 auth: 那行的 accountField 和 payload 字段名
+        # 就能知道该加哪个键。未登录时显示“未登录”。
+        if not logged_in:
+            self.login_status_label.setText("未登录")
+            color = SECONDARY_TEXT
+        elif self._session.account:
+            self.login_status_label.setText(f"当前账号：{self._session.account}")
+            color = "#4ADE80"
+        else:
+            self.login_status_label.setText("当前账号：未获取到账号信息")
+            color = "#FBBF24"
+        self.login_status_label.setStyleSheet(f"color: {color}; font-size: 13px;")
         self.login_button.setVisible(not logged_in)
         self.logout_button.setVisible(logged_in)
 

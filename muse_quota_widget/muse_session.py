@@ -27,18 +27,34 @@ SUBSCRIPTION_URL = "https://hatch-api.meta.ai/hatch/subscription"
 
 
 class MuseSession:
+    """内存会话：令牌、指纹、账号展示名都只在内存里，不写盘。
+
+    account 是当前登录账号的展示名（邮箱/用户名/手机号），
+    来源是 auth/check 或订阅响应，取不到就是 None；
+    换号、退出、令牌失效时一起清掉，不留上一个账号。
+    """
+
     def __init__(self) -> None:
         self.credential: Optional[MuseCredential] = None
+        self.account: Optional[str] = None
 
     @property
     def has_token(self) -> bool:
         return self.credential is not None and bool(self.credential.token.strip())
 
     def set_credential(self, credential: MuseCredential) -> None:
+        old = self.credential
         self.credential = credential
+        if credential.account:
+            self.account = credential.account
+        elif old is None or old.fingerprint != credential.fingerprint:
+            # 换了号且新凭据没带账号名，旧账号不能留着冒充新号。
+            self.account = None
+        # 同指纹复用且新凭据没带账号名时，保留原来已取到的账号名。
 
     def clear(self) -> None:
         self.credential = None
+        self.account = None
 
     def fetch_quota(self) -> QuotaData:
         credential = self.credential
@@ -94,6 +110,12 @@ class MuseSession:
 
         try:
             data = parse_quota(body)
+            # 订阅响应里若带了账号名，更新会话账号；没有则保留
+            # auth/check 那边已取到的账号名，不用 None 盖掉它。
+            if data.account:
+                self.account = data.account
+            elif self.account:
+                data.account = self.account
             # 每次成功也记一行数值字段（只记额度数值，不记凭据），
             # 用于对额外 token 的数；日志会随刷新增长，可随时删除。
             log_quota_numbers(body)
