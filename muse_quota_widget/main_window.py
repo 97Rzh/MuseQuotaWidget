@@ -724,9 +724,11 @@ class FloatingWindow(QWidget):
             if self._settings_morph_to_bar:
                 # 直接到小条：中途换成小条内容（藏额度区和设置块，
                 # 显小条标签，卡片边距改小条边距），不是换成完整窗体。
+                # 顶块回完整，免得展开时再漏出只有 % + 条的顶块状态。
                 self._is_settings_expanded = False
                 self._divider_widget.setVisible(False)
                 self.settings_widget.setVisible(False)
+                self._set_quota_mini(False)
                 self.quota_widget.setVisible(False)
                 self.bar_label.setVisible(True)
                 self._card_layout.setContentsMargins(8, 6, 8, 6)
@@ -752,6 +754,7 @@ class FloatingWindow(QWidget):
                     self._is_settings_expanded = False
                     self._divider_widget.setVisible(False)
                     self.settings_widget.setVisible(False)
+                    self._set_quota_mini(False)
                     self.quota_widget.setVisible(False)
                     self.bar_label.setVisible(True)
                     self._card_layout.setContentsMargins(8, 6, 8, 6)
@@ -1027,8 +1030,13 @@ class FloatingWindow(QWidget):
         # 但中途不调能让形变更稳。
         if t >= 0.5 and not self._morph_switched:
             self._morph_switched = True
+            # 进小条清设置展开标志，同 _enter_bar_mode 的原因：
+            # 否则设置展开时拖到边缘进小条，标志留着 True，
+            # 刷新和展开都会把节奏藏起来，漏出第四种状态。
+            self._is_settings_expanded = False
             self.settings_widget.setVisible(False)
             self._divider_widget.setVisible(False)
+            self._set_quota_mini(False)
             self.quota_widget.setVisible(False)
             self.bar_label.setVisible(True)
             self._card_layout.setContentsMargins(8, 6, 8, 6)
@@ -1046,14 +1054,17 @@ class FloatingWindow(QWidget):
             # 真正定在小条上：内容、边距、标签都已在中途换好，
             # 万一中途没换（比如定时器被打断），这里补一次，不会再跳。
             if not self._morph_switched:
+                self._is_settings_expanded = False
                 self.settings_widget.setVisible(False)
                 self._divider_widget.setVisible(False)
+                self._set_quota_mini(False)
                 self.quota_widget.setVisible(False)
                 self.bar_label.setVisible(True)
                 self._card_layout.setContentsMargins(8, 6, 8, 6)
                 self._sync_bar_label()
             self._hidden_edge = edge
             self._is_bar = True
+            self._is_settings_expanded = False
             self.gear_button.setVisible(False)
             self.setFixedWidth(self._bar_width)
             bx2, by2 = self._bar_position(edge, x, y)
@@ -1078,12 +1089,20 @@ class FloatingWindow(QWidget):
         return max(geom.x(), min(ref_x, geom.x() + geom.width() - bw)), geom.y() + geom.height() - bh
 
     def _enter_bar_mode(self, edge: str) -> None:
-        """完整窗体 -> 小条：藏起额度区、只留剩余额度标签。"""
+        """完整窗体 -> 小条：藏起额度区、只留剩余额度标签。
+
+        进小条必清设置展开标志：设置展开时拖到边缘进小条，
+        若标志还留着 True，下次刷新 _show_pace 会以为还在设置展开、
+        把节奏藏起来，小条划过展开后就只剩 % + 条、无节奏/重置、
+        也无设置块，成了第四种状态。清掉后小条展开必回中等窗。
+        """
         ref_x, ref_y = self.x(), self.y()
         self._hidden_edge = edge
         self._is_bar = True
+        self._is_settings_expanded = False
         self.settings_widget.setVisible(False)
         self._divider_widget.setVisible(False)
+        self._set_quota_mini(False)
         self.quota_widget.setVisible(False)
         self.bar_label.setVisible(True)
         self.gear_button.setVisible(False)
@@ -1098,14 +1117,26 @@ class FloatingWindow(QWidget):
         diagnostics.log(f"edge hidden to bar: edge={edge}")
 
     def _reveal_from_bar(self) -> None:
-        """小条 -> 完整窗体：仍在隐藏体系里，鼠标离开后会变回小条。"""
+        """小条 -> 中等窗：仍在隐藏体系里，鼠标离开后会变回小条。
+
+        必恢复中等窗内容：清设置展开标志、顶块回完整（% + 条 +
+        节奏 + 重置时间），否则设置展开时进小条留下的顶块状态
+        会直接漏到这里，变成只有 % + 条的第四种状态。
+        节奏按上次快照恢复一次，高度按恢复后的内容量。
+        """
         if self._hidden_edge is None:
             return
         edge = self._hidden_edge
         bar_x, bar_y = self.x(), self.y()
         self._is_bar = False
+        self._is_settings_expanded = False
         self.bar_label.setVisible(False)
+        self.settings_widget.setVisible(False)
+        self._divider_widget.setVisible(False)
         self.quota_widget.setVisible(True)
+        self._set_quota_mini(False)
+        if self._last_good is not None:
+            self._show_pace(self._last_good, max(0.0, min(100.0, self._last_good.remaining)))
         self._card_layout.setContentsMargins(16, 14, 16, 12)
         self.setFixedWidth(240)
         self.updateGeometry()
@@ -1134,11 +1165,17 @@ class FloatingWindow(QWidget):
         self._enter_bar_mode(self._hidden_edge)
 
     def _cancel_bar_mode(self, x: int, y: int) -> None:
-        """小条 -> 普通完整窗体：拖离边缘后取消隐藏，不再自动变回小条。"""
+        """小条 -> 普通中等窗：拖离边缘后取消隐藏，不再自动变回小条。"""
         self._hidden_edge = None
         self._is_bar = False
+        self._is_settings_expanded = False
         self.bar_label.setVisible(False)
+        self.settings_widget.setVisible(False)
+        self._divider_widget.setVisible(False)
         self.quota_widget.setVisible(True)
+        self._set_quota_mini(False)
+        if self._last_good is not None:
+            self._show_pace(self._last_good, max(0.0, min(100.0, self._last_good.remaining)))
         self._card_layout.setContentsMargins(16, 14, 16, 12)
         self.setFixedWidth(240)
         self.updateGeometry()
