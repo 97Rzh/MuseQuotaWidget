@@ -1079,11 +1079,30 @@ class FloatingWindow(QWidget):
         self.move(nx, ny)
 
     def _sync_bar_label(self) -> None:
-        """小条里的剩余额度跟主窗同步，颜色也跟主窗一致。"""
+        """小条里的剩余额度跟主窗同步，颜色按使用快慢（节奏色）决定。
+
+        不是按剩余量颜色：小条里只显示百分比，没有节奏条和节奏文案，
+        颜色就是小条里唯一的快慢信号。剩余 77% 按剩余量算是绿，
+        但快 10% 按节奏算是橙，小条就该是橙，才看得出用得快。
+        节奏色跟完整窗体的节奏文案同款（compute_pace 的 color）：
+        慢绿、持平黄、快橙、很快红；没有重置时间时回退到剩余量颜色。
+        主窗的大字百分比颜色不变，仍按剩余量（<20% 红、<50% 黄、否则绿）。
+        """
         if self._last_good is not None:
             remaining = max(0.0, min(100.0, self._last_good.remaining))
             self.bar_label.setText(f"{remaining:.0f}%")
-            self.bar_label.setStyleSheet(f"color: {_remaining_color(remaining)};")
+            color = _remaining_color(remaining)
+            reset = self._last_good.weekly_reset_at
+            if reset is not None:
+                try:
+                    now = datetime.now().astimezone()
+                    reset_local = reset if reset.tzinfo is not None else reset.replace(tzinfo=now.tzinfo)
+                    if reset_local.tzinfo is not None:
+                        reset_local = reset_local.astimezone(now.tzinfo)
+                    color = compute_pace(reset_local, now, remaining).color
+                except Exception:
+                    pass
+            self.bar_label.setStyleSheet(f"color: {color};")
         else:
             self.bar_label.setText("—")
             self.bar_label.setStyleSheet("color: #4ADE80;")
