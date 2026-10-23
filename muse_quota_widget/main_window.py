@@ -661,21 +661,24 @@ class FloatingWindow(QWidget):
         self._card_layout.setContentsMargins(16, 14, 16, 12)
 
     def _measure_settings_height(self, expanded: bool) -> int:
-        """在当前内容状态下量一次窗体高度（不改动最终状态）。
+        """在当前内容状态下量一次窗体高度（不改动最终状态、不闪屏）。
 
-        先把内容切到目标状态、量 sizeHint，再切回原状态：
-        量的时候会短暂切内容，但窗体尺寸还没动、形变还没开始，
-        用户看不到这一下切換，只看到形变从当前尺寸平滑过去。
-        量的时候把 _settings_morphing 置 True，免得 _show_pace 里
-        的 adjustSize 在量之前就把窗体先缩/放到目标高度，
-        形变还没开始就跳一下。
+        先把内容切到目标状态、量 sizeHint，再切回原状态。
+        以前这里调了两次 processEvents，Qt 会在量高度之前先把
+        目标内容重绘一遍：点齿轮后窗体先闪一下目标内容（被旧尺寸
+        夹着）、再闪回原内容、形变才开始，看起来就是卡顿。
+        现在量的时候把整窗的 updates 关掉、不调 processEvents，
+        只算 sizeHint，算完切回原状态再开 updates，重绘时只看到
+        原内容，形变从原尺寸平滑过去。量的时候把
+        _settings_morphing 置 True，免得 _show_pace 里的
+        adjustSize 在量之前就把窗体先缩/放到目标高度。
         """
         prev = self._is_settings_expanded
         self._settings_morphing = True
+        self.setUpdatesEnabled(False)
         try:
             self._apply_settings_content(expanded)
             self.updateGeometry()
-            QApplication.processEvents()
             height = self.sizeHint().height()
             height = max(height, self.quota_widget.sizeHint().height() + 30)
         finally:
@@ -683,20 +686,25 @@ class FloatingWindow(QWidget):
         # 切回原状态，形变从原尺寸开始。
         self._apply_settings_content(prev)
         self.updateGeometry()
-        QApplication.processEvents()
+        self.setUpdatesEnabled(True)
         return height
 
     def _toggle_settings(self) -> None:
-        """点齿轮展开/收起设置：跟边缘隐藏缩小同款形变过渡。
+        """点齿轮展开/收起设置：抽屉式高度形变，不再中途换内容。
 
-        不再瞬间改宽：600ms、30 步、easeInOut、透明度先跌到 0.2
-        再亮回 1.0，中途换内容。宽度始终 240（上下结构，不再变 528），
-        只有高度在变：展开时变高（上方顶块 + 细线 + 设置块），
-        收起时变回完整窗体高度；收起时若原来是小条来的，
-        形变目标直接是小条，一次形变就从大窗回到小条，
-        不用先回完整窗体再二次缩小。形变进行中再点齿轮直接返回，
-        避免两个形变打架。设置展开时拖动到边缘松手也能隐藏：
-        松手贴边就进缩小形变，定在小条上，不贴边则保持展开。
+        以前是边缘隐藏那套：600ms、easeInOut、透明度先跌到 0.2
+        再亮回 1.0、中途换内容。设置内容多（标题、按钮、滑块），
+        中途换内容 + 透明度跌到底 + 高度还在半路，三者一叠加，
+        窗体先几乎消失、再突然换成另一套内容、高度还在追，
+        看起来就是卡顿（视频里那一下）。现在改成抽屉式：
+        600ms、30 步、easeInOut、透明度全程 1.0 不变；
+        展开时形变开始前就先换成设置内容，再从中等高度长到大窗高度，
+        设置是随着高度长出来、不是中途突然换出来的；
+        收起时形变全程保持设置内容、从大窗高度缩到中等高度，
+        设置是随着高度缩回去、到结束时才换成中等窗内容；
+        收起到小条时同理，结束时才换成小条内容。
+        宽度始终 240，只有高度在变。形变进行中再点齿轮直接返回，
+        避免两个形变打架。
         """
         if self._settings_morphing or self._suction_animating or self._reveal_morphing:
             return
@@ -741,7 +749,14 @@ class FloatingWindow(QWidget):
         self._settings_morph_start = (start_x, start_y, start_w, start_h)
         self._settings_morph_target = (target_x, target_y, target_w, target_h)
         self._settings_morph_step = 0
-        self._settings_morph_switched = False
+        # 抽屉式换内容时机：展开时开始前就换成设置内容，
+        # 形变只是把它从旧高度长出来；收起时开始前不换，
+        # 全程保持设置内容、缩到目标高度后结束时才换。
+        # 所以 expanding 时这里就把 switched 置 True（已换），
+        # 收起时 switched 保持 False、结束时才换。
+        self._settings_morph_switched = expanding and not to_bar
+        if self._settings_morph_switched:
+            self._apply_settings_content(True)
         # 形变期间固定尺寸，布局的 sizeHint 才不会把窗体抢回内容高度；
         # 结束时再放开高度、只固定宽度 240。
         self.setFixedSize(start_w, start_h)
@@ -757,7 +772,9 @@ class FloatingWindow(QWidget):
         self._settings_morph_step += 1
         total = self._settings_morph_total
         t = min(1.0, self._settings_morph_step / total)
-        # 跟边缘隐藏缩小同款：easeInOut，中途已变一半才换内容。
+        # 抽屉式：easeInOut 只变高度/位置，透明度全程 1.0 不变，
+        # 形变中途不换内容。展开的内容在开始前已换好，收起的内容
+        # 在结束时才换，所以形变中途没有内容跳变和透明度闪烁。
         eased = 4 * t * t * t if t < 0.5 else 1 - ((-2 * t + 2) ** 3) / 2
         sx, sy, sw, sh = self._settings_morph_start
         bx, by, bw, bh = self._settings_morph_target
@@ -765,28 +782,8 @@ class FloatingWindow(QWidget):
         y = int(sy + (by - sy) * eased)
         w = int(sw + (bw - sw) * eased)
         h = int(sh + (bh - sh) * eased)
-        opacity = 1.0 - 0.8 * math.sin(math.pi * t)
-        self.setWindowOpacity(opacity)
         self.setFixedSize(max(20, w), max(20, h))
         self.move(x, y)
-        if t >= 0.5 and not self._settings_morph_switched:
-            self._settings_morph_switched = True
-            # 中途换内容：换内容的那一下被最暗处盖住，看起来就是
-            # 窗体在变大/变小的同时内容也跟着变，而不是跳变。
-            if self._settings_morph_to_bar:
-                # 直接到小条：中途换成小条内容（藏额度区和设置块，
-                # 显小条标签，卡片边距改小条边距），不是换成完整窗体。
-                # 顶块回完整，免得展开时再漏出只有 % + 条的顶块状态。
-                self._is_settings_expanded = False
-                self._divider_widget.setVisible(False)
-                self.settings_widget.setVisible(False)
-                self._set_quota_mini(False)
-                self.quota_widget.setVisible(False)
-                self.bar_label.setVisible(True)
-                self._card_layout.setContentsMargins(8, 6, 8, 6)
-                self._sync_bar_label()
-            else:
-                self._apply_settings_content(self._settings_morph_expanding)
         if t >= 1.0:
             expanding = self._settings_morph_expanding
             to_bar = self._settings_morph_to_bar
@@ -827,19 +824,33 @@ class FloatingWindow(QWidget):
                 diagnostics.log(f"settings toggled: expanded=False to bar edge={return_edge}")
                 return
             if not self._settings_morph_switched:
-                self._apply_settings_content(expanding)
+                # 结束时换内容：先把 morphing 置 True 压住 _show_pace
+                # 的 adjustSize，免得换内容那一下先把窗体缩/放到
+                # 内容高度、再被下面定型 resize 一次，造成第二跳。
+                self._settings_morphing = True
+                try:
+                    self._apply_settings_content(expanding)
+                finally:
+                    self._settings_morphing = False
+                self._settings_morph_switched = True
             # 结束时放开高度、只固定宽度 240，定在目标尺寸和位置。
+            # 定型高度优先用形变目标高度（量高度时已算好），不再
+            # 在这里调 processEvents 重算一次，否则结束那一下会
+            # 再闪一次、看起来像卡顿的第二跳；只有实际内容高度
+            # 跟目标差 2px 以上时才用实际高度，免得内容被夹。
             self.setMinimumWidth(0)
             self.setMaximumWidth(16777215)
             self.setMinimumHeight(0)
             self.setMaximumHeight(16777215)
             self.setFixedWidth(240)
             self.updateGeometry()
-            QApplication.processEvents()
-            # 定型：宽度 240，高度按目标内容量一次，不再用插值估算。
-            # 若量出来的高度跟插值终点差几像素，以内容为准，不会跳。
+            # morph_target 已在上面清掉，这里用本步插值终点 h，
+            # t=1.0 时它就是目标高度，不用再从已清掉的变量里取。
+            target_h = h
             final_h = self.sizeHint().height()
             final_h = max(final_h, self.quota_widget.sizeHint().height() + 30)
+            if abs(final_h - target_h) <= 2:
+                final_h = target_h
             # 位置按屏内钳制，避免定型后超出屏底。
             nx, ny = self._clamp_position(self.x(), self.y(), 240, final_h)
             self.resize(240, final_h)
