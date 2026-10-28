@@ -11,6 +11,7 @@
 （含正好等于重置时间）时才写“预计 MM-dd HH:mm 用完”；
 预计用完时间在重置时间之后时不写那个日期（重置会先到），
 改写“预计重置时还剩 X%”。所以预计日期永远不会超出重置时间。
+已经用完（剩余 ≤ 0）时不再写快/慢和预计用完，只写“已用完”。
 """
 
 from __future__ import annotations
@@ -57,6 +58,21 @@ def compute_pace(reset_local: datetime, now: datetime, remaining: float) -> Pace
     used = 100 - remaining
     delta = used - expected
 
+    fraction = (max(-25.0, min(25.0, delta)) + 25) / 50
+    if remaining <= 0:
+        # 已经用完：不再写快/慢和预计用完，文案只剩“已用完”，
+        # 颜色直接用最快的红，跟主窗 0% 的红字一致；刻度白点
+        # 仍按 Δ 位置放，不动它。
+        return PaceInfo(
+            expected=expected,
+            used=used,
+            delta=delta,
+            color="#EF4444",
+            label="已用完",
+            projected=None,
+            fraction=fraction,
+        )
+
     if delta <= -5:
         label = f"慢 {abs(delta):.0f}%"
     elif delta >= 5:
@@ -86,7 +102,6 @@ def compute_pace(reset_local: datetime, now: datetime, remaining: float) -> Pace
                 remaining_at_reset = max(0.0, min(100.0, 100 - speed * 7))
                 projected = f"预计重置时还剩 {remaining_at_reset:.0f}%"
 
-    fraction = (max(-25.0, min(25.0, delta)) + 25) / 50
     return PaceInfo(
         expected=expected,
         used=used,
