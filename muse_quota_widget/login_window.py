@@ -167,7 +167,12 @@ class LoginDialog(QDialog):
                 except Exception as e:  # noqa: BLE001 - 转发给主线程按种类处理
                     self.done.emit(None, e)
 
-        thread = QThread(self)
+        # 线程不要挂在对话框下面：验证成功后 accept() 会关闭对话框，
+        # 对话框销毁时若工作线程还没退出，Qt 会以
+        # “QThread: Destroyed while thread is still running” 直接 abort 整个进程，
+        # 无 traceback、无日志、连启动它的 cmd 窗口都跟着没。
+        # 无父对象 + finished→deleteLater，线程自己收尾，对话框随便关都安全。
+        thread = QThread()
         worker = _Worker(self._session)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
@@ -188,6 +193,12 @@ class LoginDialog(QDialog):
                 self.verify_button.setEnabled(True)
             return
         self.verified_quota = quota
+        # 先等工作线程彻底退出再关对话框：done 信号排队的 thread.quit
+        # 在主线程回到事件循环前不会执行，accept 后对话框一销毁、
+        # 线程对象跟着销毁时工作线程还活着，Qt 就会 abort 整个进程。
+        if self._fetch_thread is not None:
+            self._fetch_thread.quit()
+            self._fetch_thread.wait()
         self.accept()
 
     def _fail(self, error: MuseAuthException) -> None:
