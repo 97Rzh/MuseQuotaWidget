@@ -1,14 +1,17 @@
-"""用量节奏（第二版）的纯计算，与界面无关，可单测。
+"""用量节奏（第三版）的纯计算，与界面无关，可单测。
 
 平均线：周期按 7 天计，起点 = 重置时间 - 7 天，
-平均应为 = 已过天数 / 7 × 100%；差值 Δ = 已用% - 平均应为%。
-颜色只看 Δ（百分点，不用比值，避免周期初期比值爆炸）：
-Δ ≤ -5 青色（慢）、-5 ~ +5 绿色（持平）、+5 ~ +20 橙色（快）、
-≥ +20 红色（很快）。
-白点位置：Δ 钳制到 [-25, +25] 再映射到刻度 0 ~ 1，中央 = Δ0。
-预计用完：按当前速度（已用 / 已过天数）外推，不是承诺，
-速度一变它就变；已过天数为 0 时算不出速度，只写快/慢。
-节奏颜色：慢青色、持平绿色、快橙色、很快红色。
+平均速度 = 100% / 7 天 ≈ 每天 14.3%；当前速度 = 已用% / 已过天数。
+快/慢/持平、颜色、白点位置、预计用完时间全部按当前速度算，
+不再按累计百分点差 Δ 算——Δ 在周期初期几乎恒为 0，
+会把“几天后就用完”的速度标成持平（2026-10-29 实测：
+周期刚过 1 小时、已用 2%，Δ 只有 1.3 个百分点、标持平，
+但速度是平均线的近 3 倍、预计 10-31 就用完，前后矛盾）。
+快/慢的 % 是速度比平均线快/慢的百分比，不是累计百分点差：
+速度在平均线 ±10% 内算持平，快 10%~50% 橙色、快 50% 以上红色，
+慢 10% 以上青色。
+白点位置：速度偏差（比平均线快/慢的比例）钳制到 [-100%, +100%]
+再映射到刻度 0 ~ 1，中央 = 平均速度，偏左慢、偏右快。
 预计日期时间有限制：只在预计用完时间落在重置时间之前
 （含正好等于重置时间）时才写“预计 MM-dd HH:mm 用完”；
 预计用完时间在重置时间之后时不写那个日期（重置会先到），
@@ -40,18 +43,18 @@ class PaceInfo:
         return f"{self.label} · {self.projected}"
 
 
-def pace_color(delta: float) -> str:
-    if delta <= -5:
-        # 慢：青色（Ren 在“深绿或者青色”里二选一，取青色，
-        # 跟持平的绿区分得开）。
+def pace_color(excess_pct: float) -> str:
+    """按速度偏差着色：参数是速度比平均线快/慢的百分比。"""
+    if excess_pct <= -10:
+        # 慢：青色（跟持平的绿区分得开）。
         return "#22D3EE"
-    if delta <= 5:
+    if excess_pct <= 10:
         # 持平：绿色。
         return "#22C55E"
-    if delta <= 20:
-        # 快：跟以前一样，橙色。
+    if excess_pct <= 50:
+        # 快：橙色。
         return "#F97316"
-    # 很快：跟以前一样，红色。
+    # 很快：红色。
     return "#EF4444"
 
 
@@ -63,11 +66,20 @@ def compute_pace(reset_local: datetime, now: datetime, remaining: float) -> Pace
     used = 100 - remaining
     delta = used - expected
 
-    fraction = (max(-25.0, min(25.0, delta)) + 25) / 50
+    # 速度偏差：当前速度比平均速度快/慢的百分比。
+    # 已过天数为 0 时算不出速度，偏差按 0、标持平。
+    avg_speed = 100.0 / 7.0
+    if elapsed_days > 0:
+        speed = used / elapsed_days
+        excess_pct = (speed / avg_speed - 1.0) * 100.0
+    else:
+        speed = 0.0
+        excess_pct = 0.0
+    # 白点：速度偏差钳制到 [-100%, +100%] 再映射到 0~1。
+    fraction = (max(-100.0, min(100.0, excess_pct)) / 100.0 + 1.0) / 2.0
     if remaining <= 0:
         # 已经用完：不再写快/慢和预计用完，文案只剩“已用完”，
-        # 颜色直接用最快的红，跟主窗 0% 的红字一致；刻度白点
-        # 仍按 Δ 位置放，不动它。
+        # 颜色直接用最快的红，跟主窗 0% 的红字一致。
         return PaceInfo(
             expected=expected,
             used=used,
@@ -78,16 +90,15 @@ def compute_pace(reset_local: datetime, now: datetime, remaining: float) -> Pace
             fraction=fraction,
         )
 
-    if delta <= -5:
-        label = f"慢 {abs(delta):.0f}%"
-    elif delta >= 5:
-        label = f"快 {delta:.0f}%"
+    if excess_pct <= -10:
+        label = f"慢 {abs(excess_pct):.0f}%"
+    elif excess_pct >= 10:
+        label = f"快 {excess_pct:.0f}%"
     else:
         label = "持平"
 
     projected: Optional[str] = None
     if elapsed_days > 0:
-        speed = used / elapsed_days
         if speed <= 0:
             projected = "预计重置时还剩 100%"
         else:
@@ -111,7 +122,7 @@ def compute_pace(reset_local: datetime, now: datetime, remaining: float) -> Pace
         expected=expected,
         used=used,
         delta=delta,
-        color=pace_color(delta),
+        color=pace_color(excess_pct),
         label=label,
         projected=projected,
         fraction=fraction,
