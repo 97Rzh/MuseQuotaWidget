@@ -36,7 +36,8 @@ def main() -> int:
     app.setApplicationName("MuseQuotaWidget")
     # 故意不建系统托盘（QSystemTrayIcon）：启动时不出现托盘图标、
     # 右下角也不出现托盘图标，退出只走设置面板里的“退出软件”
-    # 按钮（FloatingWindow 里调 self.close()）。全仓任何地方
+    # 按钮（FloatingWindow 里调 QApplication.quit()，不能只调
+    # self.close()，Tool 窗关了也不退进程）。全仓任何地方
     # 都不要再加托盘，否则就违背这条定版要求。
 
     # 运行时应用图标：主窗是 Tool 窗故不进任务栏，图标主要用于

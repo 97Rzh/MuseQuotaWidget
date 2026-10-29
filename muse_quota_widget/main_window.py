@@ -211,7 +211,10 @@ class FloatingWindow(QWidget):
             pass
         # Qt.Tool：工具窗在 Windows 上不进任务栏、不进托盘、不进 Alt-Tab，
         # 启动时就不会在底部出现那个带绿 % 的图标；退出只走设置面板里
-        # 的“退出软件”按钮（调 self.close()）。无边框 + 始终置顶不变。
+        # 的“退出软件”按钮（调 QApplication.quit()，不能只调 self.close()：
+        # Tool 窗默认没有 WA_QuitOnClose，close() 只关窗口不退进程，
+        # 进程无窗口残留、还占着 dist 里的 qwindows.dll，PyInstaller
+        # --clean 删 dist 时就会报 WinError 5 拒绝访问）。无边框 + 始终置顶不变。
         # 注意：main.py 里那个“任务栏显示图标”的注释已过时，
         # 加 Tool 后任务栏不再显示它，图标只剩窗口自身的装饰（无边框故不可见）。
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
@@ -487,7 +490,7 @@ class FloatingWindow(QWidget):
         spacer(16)
         exit_button = QPushButton("退出软件")
         exit_button.setStyleSheet(DANGER_BUTTON_STYLE)
-        exit_button.clicked.connect(self.close)
+        exit_button.clicked.connect(self._on_exit_clicked)
         settings_layout.addWidget(exit_button)
 
         card_layout.addWidget(self.settings_widget, 0)
@@ -1500,6 +1503,13 @@ class FloatingWindow(QWidget):
         self.pace_widget.setVisible(False)
         self._update_login_status()
         # 退出登录不收起设置面板：用户能直接看到状态变回“未登录”。
+
+    def _on_exit_clicked(self) -> None:
+        # 必须调 QApplication.quit()，不能只调 self.close()：
+        # 主窗是 Qt.Tool 工具窗，Qt 默认不给工具窗设 WA_QuitOnClose，
+        # close() 只关窗口、事件循环不退，进程会无窗口残留，
+        # 还占着 dist 里的 DLL，之后打包删 dist 就会 WinError 5。
+        QApplication.quit()
 
     def _on_refresh_clicked(self) -> None:
         if self._session.has_token:
