@@ -39,8 +39,11 @@
 from __future__ import annotations
 
 import math
+import os
 import subprocess
 import sys
+import threading
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -218,6 +221,9 @@ class FloatingWindow(QWidget):
         # 注意：main.py 里那个“任务栏显示图标”的注释已过时，
         # 加 Tool 后任务栏不再显示它，图标只剩窗口自身的装饰（无边框故不可见）。
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        # Tool 窗默认没有 WA_QuitOnClose，显式打开它：以后不管是点
+        # “退出软件”还是其他方式关掉主窗，都按退出处理，不留残留进程。
+        self.setAttribute(Qt.WA_QuitOnClose, True)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.resize(240, 180)
         # 宽度由设置面板开关控制，不由布局说了算：Mac 上只调 resize()
@@ -1509,7 +1515,29 @@ class FloatingWindow(QWidget):
         # 主窗是 Qt.Tool 工具窗，Qt 默认不给工具窗设 WA_QuitOnClose，
         # close() 只关窗口、事件循环不退，进程会无窗口残留，
         # 还占着 dist 里的 DLL，之后打包删 dist 就会 WinError 5。
+        # 只调 quit() 还不够兜底：取数线程、WebEngine 关停挂住时，
+        # 事件循环退了进程也可能不退，所以再起一个守护线程当看门狗：
+        # 正常退出在 2 秒内就退出了进程，看门狗随进程一起死、永远跑不到；
+        # 只有干净退出挂住时，看门狗才在 2 秒后强制结束进程，
+        # 保证任务管理器里不再残留 MuseQuotaWidget.exe。
+        try:
+            self._timer.stop()
+        except Exception:
+            pass
+        for _timer in (self._settings_morph_timer, self._morph_timer, self._suction_timer, self._reveal_morph_timer):
+            try:
+                if _timer is not None:
+                    _timer.stop()
+            except Exception:
+                pass
+        QApplication.closeAllWindows()
         QApplication.quit()
+
+        def _watchdog() -> None:
+            time.sleep(2)
+            os._exit(0)
+
+        threading.Thread(target=_watchdog, daemon=True).start()
 
     def _on_refresh_clicked(self) -> None:
         if self._session.has_token:
